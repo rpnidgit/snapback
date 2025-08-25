@@ -1,0 +1,3424 @@
+#!/usr/bin/env bash
+#
+# snapback - Wrapper & Automation Tool for Borg Backup & Snapper
+# (c) 2024-2025 R.Pradella
+#
+#-----------------------------------------------------------------------------
+# Notes:
+# 1. Bash v5+ required!
+# 2. Global var naming scheme:
+#    cf*      user configurable
+#    c*       constants, not meant to be user configurable
+#    a*       general internally managed helpers
+#    env*     environmental helpers
+#    t*       time related
+#    x*       special purpose, relevant to traps
+#    g*       std. globals
+#    hHELP_*  help topic texts        (compgen-selected)
+#    cmd_*    command handler funcs   (compgen-selected)
+#    jc_*     job class handler funcs
+# 3. Will work correctly only before April 5th, 2063 Midnight MDT
+#    due to internal, special purpose timestamp use.
+#-----------------------------------------------------------------------------
+# shellcheck disable=SC2004
+# shellcheck disable=SC2015
+# shellcheck disable=SC2016
+# shellcheck disable=SC2034
+# shellcheck disable=SC2059
+# shellcheck disable=SC2120
+# shellcheck disable=SC2128
+# shellcheck disable=SC2153
+# shellcheck disable=SC2154
+# shellcheck disable=SC2155
+# shellcheck disable=SC2164
+# shellcheck disable=SC2178
+# shellcheck disable=SC2181
+# shellcheck disable=SC2190
+# shellcheck disable=SC2317
+# shellcheck disable=SC2324
+# ============================================================================
+# Bash check first, and simple! And mind our Best Before Date! ;)
+((${BASH_VERSINFO[0]} < 5))    && echo "Bash v5.0 or later required!"    && exit 1
+((EPOCHSECONDS >= 2942978400)) && echo "Sorry, script lifetime expired!" && exit 1
+# ============================================================================
+declare -r cMYNAME="snapback"
+declare -r cMYTASK="Snapshot & Backup Tool"
+declare -r cMYVERSION="0.95.0"
+declare -r cMYCOPR="© 2024-2025 R.Pradella"
+# ============================================================================
+# Normalize things right away that save us some later hassles:
+umask 0002                        # may be overridden later per config
+shopt -s extglob
+shopt -s nullglob
+shopt -s gnu_errfmt
+set   -o pipefail
+unset  LS_COLORS
+unset  LC_ALL                     # in case...
+export LC_NUMERIC=C               # calculations
+export LC_COLLATE=C               # sort (!!)
+export LC_MESSAGES=C.UTF8         # getopt output etc.
+aHOSTNAME=$(hostname 2>/dev/null)
+aMYNAME="${0##*/}"
+aPID=$$
+# ============================================================================
+# Global defaults before command line option & config
+cfBIN_BORG=borg
+cfBIN_ONCAL=systemd-analyze
+cfBIN_SNAPPER=snapper
+#cfBIN_YQ=yq                      # REQUIRED to pass per env pre cmdline options
+cfCFGFN=""                        # NOT to be passed per env! (cfCFG is ok!)
+cfDF_RESET_TIME=now
+cfETCDIR=""                       # NOT to be passed per env! (cfCFG is ok!)
+cfMOUNTDIR=""                     # NOT to be passed per env!
+cfNOTIFY_CUSTOM_FROM="$aHOSTNAME SnapBack"
+cfNOTIFY_DBUS_FROM="$aHOSTNAME SnapBack"
+cfOUTPUT_BORG=info
+cfOUTPUT_COLORS_ENABLED=2         # 0(false,never)|1(true,always)|2(auto)
+cfOUTPUT_COLORS_MAX=0             # 0(auto)|8|16|256|$((2**24))
+#cfOUTPUT_OPTIONS=""              # MUCH ok to pass per env pre cmdline options
+cfOUTPUT_SYM_SCHED='⏲'            # symbol for scheduled queues (in "show" output)
+cfOUTPUT_VERBOSITY=info
+cfPIDLOCK_MAXWAITS=5
+cfQUEUE_LASECS=2                  # lookahead seconds to add at queue buildup for miss prevention
+cfQUEUE_QOPTS=DE                  # D)ue E)rror N)on-due M)anual *)Any
+cfSNAPSHOT_LOCK_PREFIX="BSY_"
+cfSNAPSHOT_TEMP_PREFIX="TMP_"
+cfSTATEDIR=""                     # NOT to be passed per env!
+
+#cfGURU_NO_WARN_WILD_KEY=0         # Warn if a key was found that got only enabled by '*'
+#cfGURU_ALLOW_ANY_KEY=0
+cfALLOW_CUSTHOOKS=1
+#-----------------------------------------------------------------------------
+# Other global settings
+cBORG_VNRANGE="124-209"  # supported ones
+cDF_NAME="{NODE}"
+cDF_NAME_GLOB="{NODE}-*"
+cDF_NAME_IDENT="{TSYN}"
+cDF_TASK_ORDER="prune,*"
+cDF_TIME_FMT="+%FT%T"
+cERR_GEN=1                # exit codes
+cERR_NORUN=15
+cERR_BACKLOG=16
+cMAXLOGOPTS="ACSJLNPQT??" # for --debug
+cMSG_EROOT="This must be run as root!"
+cSNOOZE_RPT_SECS=60
+cSNOOZE_CHK_SECS=10
+cSUMRES=1                 # register msgs for summary
+cUMOUNT_MAXLOOPS=3
+# Predefined color definitions
+declare -A cCCF_B3=(    # 3b linux std base color stuff
+  [.@]="\e[0m"  # reset
+  [.b]="\e[1m"  # bold/bright
+  [.d]="\e[2m"  # dim
+  [.i]="\e[3m"  # italics
+  [.u]="\e[4m"  # underlined
+  [.!]="\e[5m"  # blink
+  [.r]="\e[7m"  # reverse
+  [.s]="\e[9m"  # strike-thru
+  [.0]="\e[30m"  [.1]="\e[31m"  [.2]="\e[32m"  [.3]="\e[33m"  [.4]="\e[34m"  [.5]="\e[35m"   [.6]="\e[36m"  [.7]="\e[37m"
+  [.b0]=".b .0"  [.b1]=".b .1"  [.b2]=".b .2"  [.b3]=".b .3"  [.b4]=".b .4"  [.b5]=".b .5"   [.b6]=".b .6"  [.b7]=".b .7"
+)
+declare -A cCCF_B4=(    # 4b linux std color modifiers
+  [.0]="\e[30m"  [.1]="\e[31m"  [.2]="\e[32m"  [.3]="\e[33m"  [.4]="\e[34m"  [.5]="\e[35m"  [.6]="\e[36m"  [.7]="\e[37m"
+  [.b0]="\e[90m" [.b1]="\e[91m" [.b2]="\e[92m" [.b3]="\e[93m" [.b4]="\e[94m" [.b5]="\e[95m" [.b6]="\e[96m" [.b7]="\e[97m"
+)
+# There is no B8 base! Colors from 8b are left for P8 and CUSTOM
+declare -A cCCF_P3=(    # presets for <= 4b
+  [error]=".b1"  [warn]=".b3"   [good]=".b2"   [greyed]=".b0"
+  [cmdout]=".b5" [xverb]=".2"   [data]=greyed  [ctrace]=greyed
+  [backlog]=".3" [qlist]=".b6"  [queued]=good  [due]=warn    [nondue]=".b4"
+  [active]=good  [idle]=nondue  [line]=greyed
+  # add .8-15 for convenience, only here to follow prior swaps
+  [.8]=".b0"     [.9]=".b1"     [.10]=".b2"    [.11]=".b3"    [.12]=".b4"    [.13]=".b5"    [.14]=".b6"    [.15]=".b7"
+)
+declare -A cCCF_P8=(    # modifying presets for >4b
+  [error]="196 .b"   [warn]="220 .b"  [good]="042 .b"   [greyed]=244
+  [cmdout]=038       [xverb]=073      [data]=247        [ctrace]=241
+  [backlog]="208 .b" [qlist]=036      [queued]="082 .b" [due]=227      [nondue]=075
+  [active]="082 .b"  [idle]="075 .b"  [line]=239
+)
+
+# ============================================================================
+# Our supported log levels
+declare -rA cLOGLEVS=([quiet]=0 [error]=1 [warn]=2 [info]=3 [debug]=4)
+# Our required/optional externals (not including basic POSIX/GNU/Linux ones)
+# Note getopt & yq are checked for separately, and some (systemd-analyze,
+# borg, snapper, btrfs) may be added dynamically only later
+declare -a  aBINS_REQ=("hostname" "iconv" "findmnt" "ps")
+declare -a  aBINS_OPT=("notify-send" "setpriv" "tput")
+# Variables we allow to be set from cfg file (cf*)
+declare -ra cVFLT_GLOBAL=( # no general wildcarding nor custom stuff here!
+  '*dir:path'
+  '*_df_prune_method:spalpha'
+  '*_df_task_order:taskorder'
+  archive_df_compression:borgcpr archive_df_name_glob:glob 'archive_df_name*:file' archive_df_snaptag:inregex archive_df_time_fmt:file
+  archive_df_prefix:arcpref
+  'bin_*:path'
+  df_reset_time:gnudate
+  'guru_*'
+  noprecheck:bool
+  notify_nottymute:bool 'notify_on_*:bool' notify_custom_command notify_dbus_user:posix notify_dbus_addr:path
+  'notify_*_from:noquote' notify_dbus_category:alpha notify_dbus_expire:nint notify_dbus_icon:path notify_dbus_urgency:ntfyurg
+  output_options:noquote output_verbosity:alpha output_borg:borglog 'output_sym_*:noquote'
+  output_colors_enabled:eenable output_colors_max:maxcolors output_colors_swap:cswap output_colors_relax:bool
+  'output_colors_custom_*'
+  pidlock_maxwaits:nint pidlock_surrender:bool
+  queue_qopts queue_lasecs:nint 'queue_*:bool'
+  'snapshot_*:posix'
+  'systemd_timer_*:posix' 'systemd_*:bool'
+  umask:noct
+  )
+declare -ra cVFLT_JOBS=( # wildcards & custom keys ok
+  'X*' 'x*' 'alias:posix' 'group*:posix'  # reserved ok
+  create prune        # needed for "empty task handling"
+  create_comment:noquote create_rw:bool 'create_snap_max*:nint' create_no_samefs:bool create_numids:bool create_prefix:arcpref
+  create_cachemode:borgfcm create_compression:borgcpr
+  name_glob:glob name:file
+  prune_keep_within:spalnum 'prune_keep_*:nint' prune_method:spalpha
+  repo:limname
+  'schedule*:schedspec'
+  task_order:taskorder
+  '*caches:bool'
+  '*disabled:bool'    # from job/task disabling extras
+  '*name_ident:file'
+  '*own:bool'
+  '*pattern:borgpat' '*patternfile:path'
+  '*pre' '*post'
+  '*snaptag:inregex'  # most general case here, refined later
+  '*tagfile:file'
+  '*tagkeep:bool'
+  '*time_fmt:file'
+  '*borg*opts'
+  '*' # all others are ok here
+  )
+declare -ra cVFLT_NODES=( # no general wildcarding here!
+  path:path automount:bool base:limname snappercfg:file repo_method:borgenc 'repo_pass*' repo_version:inregex
+  'X*' 'x*' 'alias:posix' 'group*:posix'  # reserved ok
+  )
+# Bad chars/stuff to look for, per (own) var classes, leading ! negates the matching
+# Note we cannot use negated classes as we're only dealing with bad chars from the C locale here
+declare -rA cVCHK_DEFS=(
+  [prnt]='[[:cntrl:]]' [bool]='!^(false|0|true|1)$' [nint]='[^0-9]'           [noct]='[^0-7]'
+  [alpha]='[^A-Za-z]'  [alnum]='[^A-Za-z0-9]'       [posix]='[^A-Za-z0-9._-]'
+  [file]='[[:cntrl:]*/<>?|]'            # bad/critical for our file names
+  [glob]='[[:cntrl:]/<>|]'              # bad for our arch & file name globs
+  [path]='[[:cntrl:]*<>?|'              # bad/critical for our paths
+  [cswap]='!^(|( *([0-7] )*[0-7] *))$'  # color swap specs
+  [arcpref]='!^(|(n[one]*)|(/[^*<>?|]*)|([^*<>?|]*/)|(p[ath]*(:[0-9]*)?))$' # archive prefix
+  [borgcpr]='[^a-z0-9,]'                              # borg compression modes (chars only)
+  [borgenc]='!^(none|(repokey|authenticated|keyfile)(-blake2)?)$'           # borg encmodes
+  [borgfcm]='[^a-z,]'                                 # borg files cache modes (chars only)
+  [borglog]='!^(critical|error|warning|info|debug)$'  # borg verbosity
+  [borgpat]='[[:cntrl:]<>'                            # bad for borg patterns
+  [eenable]='!^(false|true|always|auto|never|0|1|2)$' # e.g. output color enabling
+  [gnudate]='[^A-Za-z0-9,/:@ -]'        # GNU date
+  [inregex]='[[:cntrl:]/<>]'            # bad for limited regex, e.g. for tag matching
+  [limname]='[[:cntrl:]*./<>?|]'        # bad for our node & job names
+  [noquote]='[[:cntrl:]'\''"]'          # no ctl/quotes
+  [ntfyurg]='!^(|low|normal|critical)$' # notification urgency
+  [safetag]='[^A-Za-z0-9_-]'            # POSIX safe sans dot
+  [spalnum]='[^A-Za-z0-9 ]'             # e.g. unsigned date offsets ("2 hours" and such)
+  [spalpha]='[^A-Za-z ]'                # e.g. prune methods
+  [maxcolors]='!^(auto|8|16|256|truecolor|24bit|rgb)$'
+  [schedspec]='[^A-Za-z0-9*,./:@~ -]'   # schedules
+  [taskorder]='!^[CcPp]'                # task order
+)
+# Var fixup stuff
+declare -rA cVFIX_LOOKUP=([output_colors_enabled]="BNAA:0" [output_colors_max]="CMAX:0")
+declare -rA cVFIX_BNAA=([0]=0 [1]=1 [2]=2 [false]=0 [true]=1 [never]=0 [always]=1 [auto]=2)
+declare -rA cVFIX_CMAX=([auto]=0 [8]=8 [16]=16 [256]=256 [truecolor]=$((2**24)) [24bit]=$((2**24)) [rgb]=$((2**24)))
+declare -rA cVF_2ARY=([output_colors_custom_]="aCCF_CUSTOM")
+
+# Helpers for consolidated flag display: name | text : 0-text | 1-text
+declare -ra cRUNFLAG_INFO=(
+  "cfSYSTEMD_SETTIMER|Timer Updates|no|YES"
+  "cfQUEUE_NOPERJOB|Per Job Checks|yes|NO"    "cfQUEUE_CLEANALL|Clean All Lists|no|YES"
+  "cfQUEUE_ADDLAST|Added Jobs Last|no|YES"
+  "cfQUEUE_SNAPFIRST|Snapshes First|no|YES"   "cfQUEUE_COMPLAST|Compacts Last|no|YES"
+  "cfQUEUE_NOBACKLOG|Backlogging|yes|NO"      "cfQUEUE_NORESCAN|Rescanning|yes|NO"
+  "cfNOCREATE|Creations|yes|NO"               "cfNOPRUNE|Prunings|yes|NO"
+  )
+
+# Std. YAML Queries
+declare -r  cYP_JCFLT='["snapshot","archive","compact","custom"]' # `custom` is NOT for real use!
+declare -r  cYQ_CFGPREP='... comments=""|explode(.) //{}|pick(["Global","Nodes","Lists"])|
+           del(..|select(.==~ and key!="create" and key!="prune"))'
+declare -rA cYQ_QUERY=(
+  [cfgdata]='.Global.* //{}|..|
+    (select(kind=="scalar")|(path|.[1:]|join("_"))+"="+.)'
+  [nodedata]='.Nodes[strenv(P1)].*|del(.[]?[]?)|..|
+    (select(kind=="scalar")|(path|.[2:]|join("_"))+"="+.)'
+  [nodesbyname]='.Nodes[strenv(P1)] //{}|key'
+  [nodebypath]='[.Nodes.*|select(.path==strenv(P1))|key]|.[0]'
+  [jobdata]='.Nodes[strenv(P1)][strenv(P2)][strenv(P3)] //{}|
+	  with(.schedule;select(kind=="scalar")|.|={"@":.})|..|
+    (select(kind=="scalar")|(path|.[4:]|join("_"))+"="+.)'
+  # get first matching schedule for job P3-5 & qnglob P1 & schglob P2
+  [jobhassched]='.Nodes[strenv(P3)][strenv(P4)][strenv(P5)]|select(.disabled!=true and has("schedule"))|
+    with(.schedule;select(kind=="scalar")|.|={"@":.})|
+	  [.schedule.*|select(kind=="scalar" and length!=0 and .!="disabled" and key==strenv(P1) and .==strenv(P2))]|
+    .[0]'
+  # get sorted jn|qn|sch list for qnglob P1, with jc filter P2
+  [jobschlist]='.a=[]|.a as $a|.Nodes.* //{}|pick(env(P2))|.*[]|select(.disabled!=true and has("schedule"))|
+    with(.schedule;select(kind=="scalar")|.|={"@":.})|
+	  .schedule.*|select(kind=="scalar" and length!=0 and .!="disabled" and key==strenv(P1))|
+	  $a=$a+[[(path|.[1:4]|join(".")),key,.]]|$a|sort_by(.2)|.[]|(.0 +"|"+.1 +"|"+.2)'
+  # get jn|qn|sch list for jnglob P1 & qnglob P4, with jc filter P3
+  [jobsbyname]='.a=[]|.a as $a|.Nodes.* //{}|pick(env(P3))|.*[]|select(.disabled!=true and has("schedule"))|
+    with(.schedule;select(kind=="scalar")|.|={"@":.})|
+	  .schedule.*|select(kind=="scalar" and length!=0 and .!="disabled" and key==strenv(P4))|
+    $a=$a+[[(path|.[1:4]|join(".")),key,.]]|$a|.[]|select(.0==strenv(P1))|(.0 +"|"+.1 +"|"+.2)'
+  # get jn|qn|sch list for attr_name P1 & attr_valglob P2 & qnglob P4, with jc filter P3,
+  # allowing seq attrs and mapped schedules to be queried
+  [jobsbyattr]='.a=[]|.a as $a|.Nodes.* //{}|pick(env(P3))|.*[]|select(.disabled!=true and has("schedule") and
+    (strenv(P1)=="schedule" or ([.[env(P1)]]|flatten|any_c(.== strenv(P2)))))|
+	  with(.schedule;select(kind=="scalar")|.|={"@":.})|
+	  .schedule.*|select(kind=="scalar" and length!=0 and .!="disabled" and key==strenv(P4)
+    and (strenv(P1)!="schedule" or .==strenv(P2)))|
+    $a=$a+[[(path|.[1:4]|join(".")),key,.]]|$a|.[]|(.0 +"|"+.1 +"|"+.2)'
+  # get elem list for list P1
+  [listdata]='.Lists[strenv(P1)]|.[]|select(kind=="scalar" and length!=0)'
+  # get sorted qn list for qnglob P1, with jc filter P2
+  [schednames]='.a=[]|.a as $a|.Nodes.* //{}|pick(env(P2))|.*[]|select(.disabled!=true and has("schedule"))|
+    with(.schedule;select(kind=="scalar")|.|={"@":.})|
+    .schedule.*|select(kind=="scalar" and length!=0 and .!="disabled" and key==strenv(P1))|
+    $a=$a+[key]|$a|unique|sort|.[]'
+)
+
+# Keys for systemctl queries (some not yet used here atm, but helpful with custom setups)
+declare -ra cSCTL_COMKEYS=("Id" "Names" "LoadState" "ActiveState" "SubState" "Transient" "UnitFileState"
+                           "UnitFilePreset" "NeedDaemonReload" "FragmentPath" "DropInPaths" "Result")
+declare -ra cSCTL_SVCKEYS=("MainPID" "ExecMainStatus" "ExecMainStartTimestamp" "ExecMainExitTimestamp"
+                           "ExecMainStartTimestampMonotonic" "ExecMainExitTimestampMonotonic"
+                           "CPUUsageNSec" "CPUWeight" "CPUQuotaPerSecUSec" "CPUQuotaPeriodUSec" "IOWeight")
+declare -ra cSCTL_TMRKEYS=("Unit" "Persistent"
+                           "NextElapseUSecRealtime" "NextElapseUSecMonotonic" "LastTriggerUSec" "LastTriggerUSecMonotonic")
+
+declare    xIPCDIR
+declare -a xSUM_MSGS xTMPFILES xTMPSNAPS
+declare -A xSNAPLOCKS xSUM_INFO=([exit_reason]=FIN) # elems: exit_reason, errors, warnings
+declare    aCMDNAME aJQN
+declare -a aCMDARGS
+declare -A aBORGS aCCF_CUSTOM aCOLORS aJQIA aSNM
+
+declare -a gJQA gJPQ  # base job queue & effective job processing queue
+declare -A gNDC       # node data cache
+
+declare    aYQVN      # yq version (dec Mmms)
+declare    aBORGCMD aBORGVN aMSGPRE # global auto-defaults, may be locally overridden
+declare    aCOMPET    # another instance got a lock?
+#-----------------------------------------------------------------------------
+aVERSION="$cMYNAME $cMYTASK $cMYCOPR, version $cMYVERSION"
+hHELP_general="Usage:  $aMYNAME [general options] COMMAND [options] [arguments]
+
+General Options:
+  -c, --cfg=DIR|FILE  Use configuration from FILE (or DIR/${aMYNAME}.yaml)
+  -h, --help          Show this general help and exit
+  -V, --version       Show version info and exit
+  --precheck          Run system prerequisites checks and exit
+  --yq=FILE           Use FILE instead of the 'yq' found per \$PATH
+
+  -d, --debug         Set verbosity to debug level, implies all '--xverb's
+  -i, --info          Set verbosity to info level
+  -w, --warning       Set verbosity to warning level
+  -e, --error         Set verbosity to error level
+  -q, --quiet         Set verbosity to (mostly) quiet level
+  -x, --xverb[=FLAGS] Enable specific extra infos, see 'help xverb'
+  --colors[=MODE]     Enable/set color mode (forced), see 'help colors'
+  --nocolors          Disable colored output
+
+COMMAND:
+  dumpcfg [FILE]      Dump the preprocessed configuration to FILE (or stdout)
+                      and exit
+  help [TOPIC]        Show specific help for TOPIC, or the list of topics
+  qlist ARGS          Show or manage queue job lists
+  reset ARGS          Reinit state data and/or clear leftovers from unclean
+                      exits, and exit
+  run [OPTS] [ARGS]   Queue and process due scheduled and/or selected jobs
+  settimer            Update 'our' timer with current schedules via the con-
+                      figured drop-in and exit (systemd only)
+  show ARGS           Show specific info and exit
+
+Specific help: '$aMYNAME help COMMAND' or '$aMYNAME COMMAND -h|--help',
+               or just don't give ARGS where indicated as required.
+
+COMMAND may be abbreviated as long as remaining unique.
+Note most commands require a valid configuration, and some to be run as root.
+"
+hHELP_help="Available topics for '$aMYNAME help TOPIC':
+
+TOPIC         Help Content
+------------------------------------------------------------------------------
+general       General help, same as '$aMYNAME -h'
+help          This list
+
+dumpcfg       Command specific help for dumpcfg
+qlist         Command Specific help for qlist
+reset         Command Specific help for reset
+run           Command Specific help for run
+settimer      Command Specific help for settimer
+show          Command Specific help for show
+
+colors        Colored output options
+jspecs        Specifying individual jobs
+precheck      The '--precheck' option
+xverb         Flags for the '-x / --xverb' option
+
+TOPICs may be abbreviated as long as they remain unique.
+"
+hHELP_dumpcfg="
+Usage:  $aMYNAME [general options] dumpcfg [FILE]
+
+Requires root privileges.
+
+This command dumps the preprocessed configuration to FILE, or to stdout if the
+parameter is omitted or given as '-', and exits afterwards.
+The output may then be used to e.g. locate errors based on the line numbers
+given with error messages.
+
+Note that any passwords contained in the configuration are also included in
+the output.
+"
+hHELP_qlist="
+Usage:  $aMYNAME [general options] qlist OPERATION @QNGLOB [JSPEC [...]]
+
+Requires root privileges except for list/show.
+
+This command allows to control and manage persistent job lists from the
+command line, i.e. jobs for individual 'named queues' as well as the backlog
+of the standard queue.
+
+OPERATIONs:
+
+show, list  List all jobs currently stored for @QNGLOB.
+            Defaults to all lists ('@*').
+clear       Clear all current storage(s) for @QNGLOB.
+add         Add jobs given per JSPEC to the @QNGLOB storage(s).
+set         Same as 'add', but clearing any prior entries.
+sub         Subtract jobs given per JSPEC from the @QNGLOB storage(s).
+
+Arguments:
+
+@QNGLOB     Optionally globbed @QNAME qlist/queue specifier:
+            @@     refers to the '@' standard (scheduled) system queue, giving
+                   access to its backlog.
+            @NAME  is a user defined, named queue that may be processed per the
+                   'run' command, with jobs automatically removed and empty
+                   storage deleted after successful completion.
+
+JSPEC       One or more job specifier(s). See '$aMYNAME help jspecs'.
+            The show/list and clear OPERATIONs do not take any JSPEC, the
+            others require at least one.
+
+OPERATIONs may be abbreviated as long as they remain unique.
+"
+hHELP_reset="
+Usage:  $aMYNAME [general options] reset --stale
+   or:  $aMYNAME [general options] reset --all [DATE]
+
+Requires root privileges.
+
+--stale   When run with this option, this looks for and cleans stale
+          bind mounts, temporary (staging) snapshots, and snapshot locks
+          that may be left, and asking for troubles, after an unclean exit.
+
+--all     This also clears all state data, and reinits the standard system
+          queue as well as any others configured with schedules to 'as if
+          last run' at DATE.
+
+          If DATE is omitted, the preconfigured default (Global.df_reset_time)
+          is used.
+          Otherwise, it is expected in GNU coreutils date input format, like
+            now
+            today 0
+            yesterday 0
+
+CAUTION: '--all' causes ALL state data to be erased, including QLists/backlogs,
+         and per-job lastruns.
+"
+hHELP_run="
+This command does all the main processing, in one of three styles:
+
+1: $aMYNAME [general options] run [options] [@@] [JSPEC [...]]
+   for STANDARD queue processing, using
+   - any current list/backlog for the standard queue,
+   - all jobs currently due per the standard ('@') schedule,
+   - any extra jobs as given by JSPEC(s).
+
+   Note: The '@@' @QNAME is only required when additional jobs are
+   given per JSPEC(s).
+
+2: $aMYNAME [general options] run [options] [@] JSPEC [...]
+   for INDIVIDUAL job processing, using one or more JSPEC(s).
+
+   Note: The '@' unnamed pseudo @QNAME is only required if the first
+   JSPEC is itself a @QNAME, i.e. starts with '@'.
+
+3: $aMYNAME [general options] run [options] @QNAME [JSPEC [...]]
+   for CUSTOM named queue processing, using
+   - any current list/backlog for @QNAME,
+   - any jobs currently due per a schedule of the same name,
+   - any extra jobs as given by JSPEC(s).
+
+See '$aMYNAME help jspecs' for how to specifiy individual jobs.
+See '$aMYNAME help qlist' for queue lists and @QNAMEs.
+
+Root privileges are mandatory.
+
+Run Options:
+-n, --dryrun    Do NOT actually create or modify anything, incl. backlogs.
+--at=GNUDATE    Register this run to be executed by systemd at GNUDATE
+                instead of running right away (*).
+--nocreate      Skip all creations.
+--noprune       Skip all prunings.
+--surrender     Exit w/o error when already running.
+
+Run Options overriding Config Settings:
+--[no]addlast   Queue jobs added per command line behind all others.
+--[no]backlog   Backlogging and backlog processing (*).
+--[no]cleanall  Clean completed jobs from all lists.
+--[no]complast  Demote repo compact jobs.
+--[no]perjob    Consider last job completion times when queueing by
+                schedule (*).
+--[no]rescan    Rescan for and run newly due jobs at the end (*).
+--[no]settimer  Automatically update systemd timer settings according
+                to configured schedules (*).
+--[no]snapfirst Promote snapshing jobs.
+
+(*) effective only where applicable per the environment and current
+    processing style.
+"
+hHELP_settimer="
+Usage:  $aMYNAME [general options] settimer
+
+Requires root privileges.
+
+If applicable, this command updates the configured or detected standard
+systemd timer with the currently configured, calendaric job schedules,
+and exits when done.
+
+This is a forced manual alternative to optional automated updating.
+"
+hHELP_show="
+Usage:  $aMYNAME [general options] show SUBJECT [arguments]
+
+Subjects & arguments:
+colors                       Show current color configuration infos.
+config       [STRING]        Dump global config vars matching *STRING*.
+jobinfo      JSPEC           List the currently effective configuration and
+                             status info for the job(s) specified by JSPEC.
+nodeinfo     NAMEGLOB        List current info for the node(s) matching the
+                             given name glob.
+notification [TITLE [BODY]]  Try to send a notification per the configured
+                             means. Defaults to a generic test message.
+qlist        [@QNGLOB]       List all jobs currently stored for the specified
+                             list(s). Same as 'qlist list|show [@QNGLOB]'.
+@QNGLOB                      Same as 'qlist list|show [@QNGLOB]'.
+runoptions                   Show the currently configured options for 'run'.
+status       [@QNAME]        Show a current status overview for a given queue.
+                             Defaults to the standard queue ('@@').
+service      [NAME]          Systemd only: Show info about 'our' service unit.
+                             Specify NAME in case of discovery quirks.
+timer        [NAME]          Systemd only: Show info about 'our' timer unit.
+                             Specify NAME in case of discovery quirks.
+
+SUBJECTs may be abbreviated as long as they remain unique.
+"
+hHELP_colors="
+Colored output options:
+
+--colors[=MODE]       forcefully enables (de-)accentuating some of the output
+                      using configured or default color assignments.
+--nocolors            forcefully disables colored output.
+
+Standard MODE argument values are
+
+8|16|256              for 8, 16, or 256 colors,
+24bit|truecolor|rgb   for 24bit RGB.
+
+If the MODE argument is omitted or contains another value, the max. number is
+attempted to be obtained automatically.
+"
+hHELP_jspecs="
+JSPECS - Specifying/selecting individual jobs:
+
+One or more specifiers may be given, in several forms, separated by whitespace:
+
+node_name.job_class.job_index  (e.g. 'myhome.archive.0', 'myhome.archive.nas')
+    Using 'native' job names as per the basic YAML configuration tree. Depen-
+    ding on if a job is configured in anonymous sequence (array) form, or as
+    a named object, job_index is either its instance sequence no. or name.
+    Job names may be given as globs, e.g. 'myhome.archive.*'.
+
+.attr_name=attr_value         (e.g. '.alias=myhomebup', '.group=mybups')
+    Selecting jobs by attribute and value. Any scalar (string-like) or simple
+    sequence (array) attribute configured at the jobs' top level may be queried,
+    selecting the job if the value matches, in case of sequences for any of the
+    elements.
+    Values may be given as globs, e.g. '.group=my*'.
+
+:joblist_name
+    Using a named joblist defined in the 'Lists:' section of the cfg file, con-
+    taining a sequence of jobs by name, attribute selectors and/or @qnames.
+
+%filename
+    Using a file containing job names, attribute selectors, and/or @qnames,
+    separated by newline.
+    If no path is given, it will be looked for in the path the configuration
+    was loaded from. Initial '~' are not allowed.
+
+@qname
+    Using the current contents of the qname QList.
+
+Jobs are picked in argument order, and first-to-last for each if there are
+multiple matches, with glob matches picked top-down from the configuration.
+If a job matches more than once, only the first match is regarded.
+Disabled jobs do never match.
+"
+hHELP_precheck="
+System prerequisites check:
+
+With the --precheck option an isolated system prerequisites check is performed
+before exiting without running any command.
+In case a configuration is explicitely given along with the -c/--cfg option,
+it is also parsed, and some further things are checked for.
+"
+hHELP_xverb="
+Enabling extra verbose output:
+
+The -x/--xverb option serves to enable extra, 'per aspect' output regardless
+of the general verbosity setting.
+It takes a string parameter consisting of mostly single characters, each
+flagging an individual aspect of interest:
+
+A  : Archiving                      C  : Configuration
+J  : Jobs                           L  : Lists
+N  : Node infos                     P  : Pruning
+Q  : Job Queuing & Selection        S  : Snapshing
+T  : (Systemd) Timer related infos
+?  : Adds caller/lineno. info to the output
+?? : Displays the full call chain
++  : Enables all
+
+An empty or '-' input clears all flags enabled per the configuration.
+This option overrides the 'Global.output.options' configuration setting.
+"
+##############################################################################
+# %Input
+
+proc_args (){ local -A cfv; local os cmd v
+  _set_opts (){ local k v
+    for k in "${!cfv[@]}"; do v="${cfv[$k]}"; [ "$v" = "true" ] && v=1; [ "$v" = "false" ] && v=0
+      printf -v "cf$k" '%s' "$v"
+    done
+    case $cfOUTPUT_COLORS_MAX in 8|16|256|16777216) aTTYCOLORS="$cfOUTPUT_COLORS_MAX";; esac # forced values
+    set_colors
+  }
+  chk_getopt || exit_err "GNU enhanced getopt required!"
+  if ! os=$(getopt -n "" \
+    -o -c:hVx:deiqvwn \
+    -l cfg:,help,version,precheck,xverb::,yq:,colors::,nocolors,debug,error,info,quiet,verbose,warning \
+    -l all,stale \
+    -l dryrun,at:,nocreate,noprune \
+    -l addlast,noaddlast,backlog,nobacklog,cleanall,nocleanall,complast,nocomplast \
+    -l perjob,noperjob,rescan,norescan,settimer,nosettimer,snapfirst,nosnapfirst,surrender,nosurrender \
+    -- "$@" 2>&1);
+  then exit_getopterrs "$os"; fi
+  eval set -- "$os"
+  xARGS=("$@")  # remember for later use
+  while (($#)); do
+	  case $1 in
+      -c|--cfg)       cfv[CFG]=$(realpath -e "$2" 2>/dev/null) || exit_inperr "Bad cfg source '$2'"; shift ;;
+         --colors)    cfv[OUTPUT_COLORS_ENABLED]=1
+                      case $2 in
+                 8|16|256)  cfv[OUTPUT_COLORS_MAX]="$2";;
+              24b*|t*|rgb)  cfv[OUTPUT_COLORS_MAX]=$((2**24));;
+                        *)  cfv[OUTPUT_COLORS_MAX]=0;;
+                      esac; shift;;
+         --nocolors)  cfv[OUTPUT_COLORS_ENABLED]=0;;
+      -d|--debug)     cfv[OUTPUT_VERBOSITY]=debug; cfv[OUTPUT_OPTIONS]="$cMAXLOGOPTS"; aSHOW_RUN_TIME=1;;
+      -v|--verbose)   cfv[OUTPUT_VERBOSITY]=info;;
+      -i|--info)      cfv[OUTPUT_VERBOSITY]=info;;
+      -w|--warning)   cfv[OUTPUT_VERBOSITY]=warn;;
+      -e|--error)     cfv[OUTPUT_VERBOSITY]=error;;
+      -q|--quiet)     cfv[OUTPUT_VERBOSITY]=quiet; cfv[OUTPUT_OPTIONS]="";;
+      -x|--xverb)     [ "$2" = "+" ] && cfv[OUTPUT_OPTIONS]="$cMAXLOGOPTS" || cfv[OUTPUT_OPTIONS]="$2"; shift;;
+      -h|--help)      echo "$hHELP_general" >&2; exit 1;;
+      -V|--version)   echo "$aVERSION"; exit 1;;
+         --precheck)  cmd=_precheck;;
+         --yq)        cfv[BIN_YQ]="$2"; shift;;
+		     --)          shift; break;;
+         -*)          exit_inperr "Misplaced option '$1'";;
+         "")          ;;
+		  *)              [ ! "$cmd" ] && cmd="${1,,}"; shift; break;;
+	  esac
+	  shift
+  done
+  _set_opts
+  [ "$cfBIN_YQ" ] || cfBIN_YQ=yq  # set now if not given per environment or option
+  if inopts C; then msg "Options done" ---C; ((${#cfv[@]})) && msg "🢃 General Overrides" ---C && dump_dmap cfv; fi
+  [ ! "$cmd" ] && error "Missing command" && echo "$hHELP_general" >&2 && exit_err
+  complete_ulc cmd function cmd_ v && cmd="${cmd:4}" || exit_inperr "$v command '$cmd'" # expand incomplete cmd
+  # modify to `help $cmd' when -h/--help is given after the cmd
+  for v in "$@"; do case $v in -h|--help) set -- "$cmd"; cmd=help; break;; esac; done
+  case $cmd in
+    help|_precheck) cfNOPRECHECK=1 ;; # no std. conf search & prechecking for these!
+    *)  for v in "./$aMYNAME" "./snapback" "/etc/$aMYNAME/$aMYNAME" "/etc/snapback/$aMYNAME" "/etc/snapback/snapback"; do
+          [ ! "$cfCFG" ] && v=$(realpath -e "${v}.yaml" 2>/dev/null) && [ -f "$v" ] && cfCFG="$v" && break
+        done ;;
+  esac
+  if [ "$cfCFG" ]; then
+    [ -d "$cfCFG" ] && cfCFG+="/${aMYNAME}.yaml" # default completion for convenience
+    ! chk_yq && exit_err
+    if ! cf_load; then error "Configuration failed!"
+      [ "$cmd" = "dumpcfg" ] && cmd_dumpcfg "${@:1:${#}-1}"
+      exit_err
+    fi
+    _set_opts      # again, as possibly overwritten
+    [ "$cfUMASK" ] && chk_varclass "$cfUMASK" noct && umask "$cfUMASK" && xvmsg C "umask set to $cfUMASK" # non-default umask
+    xvmsg C "Cfg done"
+    chk_workdirs   # belongs to the cfg, not the prereqs!
+  fi
+  # finalize for actual cmd stuff
+  aCMDNAME="$cmd"
+  aCMDARGS=("$@"); ((${#aCMDARGS[@]})) && [ "${aCMDARGS[-1]}" = "--" ] && unset "aCMDARGS[-1]"
+  ((cfNOPRECHECK)) || chk_pre
+  aJQN="@"         # default to the std. queue
+}
+
+# Unique lower case name completion helper
+# 1: input varname, to receive completion on success
+# 2: type: function|variable
+# 3: opt. prefix for checking
+# 4: opt. varname to get "Bad" or "Ambiguous" on failure
+complete_ulc (){ local -n cv_=$1; local -a ia
+  [ "$4" ] && local -n rv_=$4 && rv_=""
+  readarray -t ia < <(compgen -A "$2" "$3${cv_,,}")
+  case ${#ia[@]} in 1) cv_="${ia[0]}";;
+                    0) [ "$4" ] && rv_="Invalid";   return 1;;
+                    *) [ "$4" ] && rv_="Ambiguous"; ((${#ia[@]} < 255)) && return ${#ia[@]} || return 255;;
+  esac
+}
+# Fixup getopt error msgs before exit
+exit_getopterrs (){ local -a ia; local l
+  readarray -t ia <<<"$1"
+  for l in "${ia[@]}"; do [[ "$l" = ":"* ]] && error "Input$l"; done
+  exit_err "Failed to process input"
+}
+exit_inperr (){ error "Input: $1"; exit_err "Failed to process input"; }
+
+##############################################################################
+# %Output
+
+# Cond. extra log options block helper
+inopts (){ [[ "$cfOUTPUT_OPTIONS" = *"$1"* ]]; }
+# Check if level $1 qualifies for display
+msg_chklev (){ local l=${1,,}
+  # init numeric level if needed
+  if [ ! "$aVERBOSITY_NUM" ]; then
+    [ "$cfOUTPUT_VERBOSITY" ] || cfOUTPUT_VERBOSITY=info
+    aVERBOSITY_NUM=${cLOGLEVS[${cfOUTPUT_VERBOSITY,,}]}
+    [ "$aVERBOSITY_NUM" ] || aVERBOSITY_NUM=${cLOGLEVS[info]}
+  fi
+  [ "${cLOGLEVS[$l]}" ] && ((cLOGLEVS[$l] <= aVERBOSITY_NUM))
+}
+msg_setlev (){ if [ "$cfOUTPUT_VERBOSITY" != "debug" ]; then aVERBOSITY_NUM=""; cfOUTPUT_VERBOSITY="$1"; fi }
+# Register msg $1 with level $2 for summary, for use e.g. in notifications
+msg_sumreg (){
+  case ${2,,} in
+    error) ((xSUM_INFO[errors]++));   xSUM_MSGS+=("E $1") ;;
+     warn) ((xSUM_INFO[warnings]++)); xSUM_MSGS+=("W $1") ;;
+  esac
+}
+# Display msg $1 with opt. level $2
+msg (){ local -r spc="       "; local -i i; local m="$1"
+  [ "$cfOUTPUT_VERBOSITY" = "quiet" ] && return 0
+  [ "$aMSGPRE" ] && m="$aMSGPRE: $m"
+  ((cfDRYRUN))   && m="Dry-Run: $m"
+  # Check level against configured $cLOGLEVS & $cfOUTPUT_VERBOSITY* before printing as prefix & continuing
+  if [ "$2" ]; then
+    ((cSUMRES)) && msg_sumreg "$1" "$2"
+    # shellcheck disable=SC2046
+    [[ "$2" = -* ]] || msg_chklev "$2" || return 0
+    printf -v m "%s%s %s" "${2^^}" "${spc:${#2}}" "$m"
+    if ((cfOUTPUT_COLORS_ENABLED)); then
+      [[ "$2" = -* ]] && m="${aCOLORS[xverb]}$m" || m="${aCOLORS[${2,,}]}$m"
+    fi
+  fi
+  if [[ "$cfOUTPUT_OPTIONS" == *"?"* ]]; then
+    # always add source info at debug level
+    case ${FUNCNAME[1]} in exit_*|info|warn|error|cfgerr|xvmsg) i=1;;
+                           *) i=0;;
+    esac
+    ((cfOUTPUT_COLORS_ENABLED)) && m+="${aCOLORS[ctrace]}"
+    while ((BASH_LINENO[$i])); do
+      m+=" ⯇${FUNCNAME[((i+1))]}:${BASH_LINENO[$i]}"
+      [[ "$cfOUTPUT_OPTIONS" != *"??"* ]] && break
+      ((i++))
+    done
+  fi
+  ((cfOUTPUT_COLORS_ENABLED)) && m+=$'\e[0m'
+  echo -e "$m"
+}
+# Msg miniwrappers
+info    (){ msg "$1" "${2:-INFO}";   }
+warn    (){ msg "$1" "${2:-WARN}";   }
+error   (){ msg "$1" "${2:-ERROR}";  }
+cfgerr  (){ msg "Cfg ERR: $1" ERROR; }
+xvmsg   (){ inopts "$1" && msg "$2" "---$1"; }
+
+# Dump the string passed in $1 to log
+dump_str  (){ local t="${1:-(none)}" && cprintf "${2:-data}" '\t%s\n' "$t"; }
+# Dump the simple ary named $1
+dump_ary  (){ local -n la_=$1; ((${#la_[@]})) && cprintf "${2:-data}" '\t%s\n' "${la_[@]}" || cprintf "${2:-data}" '\t(none)\n'; }
+# Dump the external tool output buffer passed in $1
+dump_out  (){ local -a ia
+  readarray -t ia <<<"$1"
+  [ "${ia[-1]}" ] || unset "ia[-1]"
+  ((${#ia[@]})) && cprintf "${2:-cmdout}" '\t%s\n' "${ia[@]}" || cprintf "${2:-cmdout}" '\t(none)\n'
+}
+# Dump seq map ('n|key' hash) $1 using filter ary $2 (defaults to '$1_KEYS')
+dump_smap (){ local -n va_=$1 ka_=${2:-${1}_KEYS}; local -i i j=0; local k m t
+  ! ((${#ka_[@]})) && error "No keys given to list $1" && return 1
+  ((${#va_[@]})) && for (( i=0; ; i++ )); do m=""
+    for k in "${ka_[@]}"; do t="${va_[${i}|$k]}"
+      if [ "$t" ]; then t=${t//\'/\\\'}; [[ "$t" = *" "* ]] && t="'$t'"; m+="$k=$t "; fi
+    done
+    [ "$m" ] || break
+    cprintf data "\t%i:\t%s\n" "$i" "$m" && ((j++))
+  done
+  ((!j)) && cprintf data '\t(none)\n' || :
+}
+# Dump "dict" map ('name|key' hash) $1, optionally just dict $2
+dump_dmap (){ local -n a_=$1; local -i i=0; local buf k m v; local -r hide=" repo_passphrase " d=${2:-*}
+  for m in "${!a_[@]}"; do
+    [ "$d" != "*" ] && [ "${m%%|*}" != "$d" ] && continue
+    k=${m#*|}; v="${a_[$m]}"; [[ "$hide" = *" $k "* ]] && v="[hidden]"
+    [ "$d" != "*" ] && buf+=("$k=$v") || buf+=("$m=$v")
+    ((i++))
+  done
+  if ((i));
+  then readarray -t buf < <(printf "%s\n" "${buf[@]}" | sort -bt'=' -k1,1)
+       cprintf data "\t%s\n" "${buf[@]}"
+  else cprintf data '\t%s\n' "($1:$d is empty)"
+  fi
+}
+# List jobs from ary $1 with coloring spec $2
+dump_jobs (){ local -n la_=$1; local -a ia; local c=${2:-std} cc l
+  local -r spc="                   "
+  ((${#la_[@]})) || cprintf greyed '\t(none)\n'
+  for l in "${la_[@]}"; do
+    readarray -td\| ia <<<"$l|"
+    [ "$c" = "X" ] && case ${ia[5]} in N) cc=nondue;; D) cc=due;; E) cc=error;; *) cc=greyed;; esac || cc="$c"
+    cprintf "$cc" '\t%s\t%s%s\t%s\n' "${ia[5]}" "${ia[3]}" "${spc:${#ia[3]}}" "${ia[0]}"
+  done
+  :
+}
+# List current flag options
+dump_flags (){ local -n ia_=$1; local -a fa; local fe
+  local -r spc="                "
+  for fe in "${ia_[@]}"; do
+    readarray -td\| fa <<<"$fe|"
+    local -n f_="${fa[0]}"
+    cprintf "${2:-data}" '\t%s%s: %s\n' "${fa[1]}" "${spc:${#fa[1]}}" "${fa[((f_+2))]}"
+  done
+}
+
+##############################################################################
+# %Notifications
+
+# Send a notification with title $2, body $3, data $4. Log call output when $1 != '-'
+notify (){ local -i r=0
+  [ "$1" ] || return 0 # nothing to do when no title
+  if [ "$cfNOTIFY_DBUS_USER" ] || [ "$cfNOTIFY_DBUS_ADDR" ]; then notify_dbus "$@" || r=1; fi
+  if [ "$cfNOTIFY_CUSTOM_COMMAND" ];                         then notify_cust "$@" || r=1; fi
+  ((!r))
+}
+# Send a custom notification with title $2, body $3, data $4. Log call output when $1 != '-'
+notify_cust (){ local buf
+  local -a args=("--from=$cfNOTIFY_CUSTOM_FROM" "--title=$2" "--body=$3" "--data=$(printf "$4")")
+  if ! buf=$(bash -O gnu_errfmt -c "$cfNOTIFY_CUSTOM_COMMAND \"\$@\"" "Hook" "${args[@]}" 2>&1);
+  then
+    error "Error sending custom notification"
+    [ "$1" != '-' ] && error "🢃 More" && cprintf cmdout '\t%s\n' "$buf"
+    return 1
+  fi
+}
+# Send a dbus notification with title $2, body $3. Log call output when $1 != '-'
+notify_dbus (){ local a id un sa buf
+  local -a  cmda=(notify-send)
+  #local -a  cmda=("$(which notify-send)")
+  local -rA opts=([app-name]="$cfNOTIFY_DBUS_FROM"
+                  [category]="$cfNOTIFY_DBUS_CATEGORY"
+                  [expire-time]="$cfNOTIFY_DBUS_EXPIRE"
+                  [icon]="$cfNOTIFY_DBUS_ICON"
+                  [urgency]="$cfNOTIFY_DBUS_URGENCY"
+            )
+  if ! dowehave setpriv || ! dowehave notify-send; then
+    error "DBus notifications require setpriv and notify-send!"                              && return 1
+  fi
+  if [ "$cfNOTIFY_DBUS_ADDR" ]; then
+    sa="${cfNOTIFY_DBUS_ADDR#*=}" # strip "unix:path=" prefix
+    ! un=$(stat --printf='%U' "$sa" 2>/dev/null) && warn "No DBus notification socket '$sa'" && return 1
+    id=$(id -u "$un" 2>/dev/null)
+  elif [ "${cfNOTIFY_DBUS_USER//[0-9]}" ];
+    then un="$cfNOTIFY_DBUS_USER"; id=$(id -u  "$un" 2>/dev/null)
+    else id="$cfNOTIFY_DBUS_USER"; un=$(id -un "$id" 2>/dev/null)
+  fi
+  (($?)) && error "Cannot notify bad user '$cfNOTIFY_DBUS_USER'"                             && return 1
+  [ "$sa" ] || sa="/run/user/$id/bus" # use (our) std socket unless overridden
+  [ ! -S "$sa" ] && warn "No current DBus session for user $un ($id)"                        && return 1
+  for a in "${!opts[@]}"; do [ "${opts[$a]}" ] && cmda+=("--$a=${opts[$a]}"); done; cmda+=("$2" "$3")
+  if ((EUID != id)); then
+    ((EUID)) && error "Must be root for DBus notifications to another user"                  && return 1
+    cmda=(setpriv --reuid "$id" --init-groups -- "${cmda[@]}")
+  fi
+  if ! buf=$(DBUS_SESSION_BUS_ADDRESS="unix:path=$sa" "${cmda[@]}" 2>&1); then
+    error "Error sending DBus notification to user $un ($id)"
+    [ "$1" != '-' ] && error "🢃 More" && cprintf cmdout '\t%s\n' "$buf"
+    return 1
+  fi
+}
+# Build summary and send notification(s)
+sum_notify (){ local tit bdy dta t
+  ((envTTY && !cfNOTIFY_NOTTYMUTE)) && return 0
+  t="${xSUM_INFO[exit_reason]}"
+  case $t in
+    SIG*)    ((cfNOTIFY_ON_SIGNALS))    && ((${#gJPQ[@]})) &&            tit="Interrupted by $t"   ;;
+    ERR)     ((cfNOTIFY_ON_FATAL))      &&                               tit="Aborted after error" ;;
+    *)  if   ((cfNOTIFY_ON_ERRORS))     && ((xSUM_INFO[errors]));   then tit="Finished with errors"
+        elif ((cfNOTIFY_ON_WARNINGS))   && ((xSUM_INFO[warnings])); then tit="Finished with warnings"
+        elif ((cfNOTIFY_ON_INCOMPLETE)) && ((${#gJQA[@]}));         then tit="Finished with incomplete jobs"
+        #else tit="Finished OK"
+        fi
+      ;;
+  esac
+  [ "$tit" ] || return 0
+  dta="exit_reason: $t\nerrors: $((xSUM_INFO[errors]))\nwarnings: $((xSUM_INFO[warnings]))\n"
+  t=${#gJQA[@]}
+  # CAUTION: U+200B chars used below in bdy to get empty lines!
+  if ((t));
+  then bdy+="​\n<b>$t job(s) incomplete:</b>\n"; dta+="incomplete:\n"
+       for t in "${gJQA[@]}"; do printf -v t '%s\n' "${t%%|*}"; bdy+="$t"; dta+="  - $t"; done
+  else bdy+="​\n<b>No incomplete jobs</b>\n"
+  fi
+  if ((${#xSUM_MSGS[@]}));
+  then bdy+="​\n<b>Messages:</b>\n"; dta+="messages:\n"
+       for t in "${xSUM_MSGS[@]}"; do printf -v t '%s\n' "$t";  bdy+="$t"; dta+="  - $t"; done
+  fi
+  info "Sending status notification"
+  notify - "$tit" "$bdy" "$dta"
+}
+
+##############################################################################
+# %Config & Setup
+
+# Preprocess & load cfg from base file $cfCFG into $1, applying yq query $2 to prep
+cf_load (){ local -n rvn_=${1:-aCFGCACHE} yqq_=${2:-cYQ_CFGPREP}; local -i gli=1; local -a cfa; local buf t
+  [ "$2" ] || info "Configuring from $cfCFG"
+  # 1:prior_info, 2:indentation prefix, 3:filename
+  _cfgr (){ local -i li=1; local l pre ifn ffn
+    ffn=$(realpath -e "$3" 2>/dev/null) || ffn="$3"
+    [ ! -f "$ffn" ]                            && error "No such file (${1##*/}): '$ffn'"      && return 1
+    [ ! -r "$ffn" ]                            && error "May not read (${1##*/}): '$ffn'"      && return 1
+    chk_fileperms "$ffn"                       || warn  "Insecure permissions for '$ffn'!"
+    xvmsg C "⮡ Including from ${1##*/}: $3"  # had '${ffn#"$xIWD/"}'
+    for l in "${cfa[@]}"; do [ "$l" = "$ffn" ] && error "Looping inclusion (${1##*/}): '$ffn'" && return 1; done
+    cfa+=("$ffn")    # check into loop det
+    while IFS= read -r l; do
+      if [[ "$l" =~ ^([[:space:]]*)INCL([A-Za-z0-9_])*: ]]; then
+        pre="${l%%I*}"; ifn="${l#*:}"; ifn="${ifn##+([[:space:]])}"; ifn="${ifn%%+([[:space:]])}" # not enforcing ws after ':' here for simplicity
+        if [ "$ifn" ]; then _cfgr "$ffn #$li, total #$gli" "$2$pre" "$ifn" || return 1; fi
+      elif [[ ! "$l" =~ ^([[:space:]]*(#.*)*)$ ]]; then buf+="$2$l"$'\n'; ((gli++)) # skipping empty lines right here as yq doesn't count them,
+                                                                                    # and would give confusing error line nos.
+      fi
+      ((li++))
+    done <"$ffn" 2>/dev/null
+    unset "cfa[-1]"  # checkout from loop det
+  }
+  ! cd "${cfCFG%/*}" && error "Could not cd to '${cfCFG%/*}'" && return 1 # We cd to ease local includes & other file naming!
+  _cfgr "-start-" "" "$cfCFG"                                 || return 1
+  t=$(wc -l <<<"$buf"); xvmsg C "Cfg lines assembled: $t"
+  cfa=("$cfBIN_YQ"); ((aYQVN>4470)) && cfa+=(--yaml-fix-merge-anchor-to-spec=true)
+  if ! rvn_=$("${cfa[@]}" "$yqq_" <<<"$buf" 2>/dev/null); then
+     ! t=$("${cfa[@]}" -e 'tag=="!!map" or tag=="!!seq"' <<<"$buf" 2>&1 >/dev/null) \
+         && error "Bad cfg YAML: \"$t\"" \
+         || error "Bad cfg: \"$("${cfa[@]}" "$yqq_" <<<"$buf" 2>&1 >/dev/null)\""
+     rvn_="$buf" # copy into the target var to enable dumping
+     return 1
+  fi
+  t=$(wc -l <<<"$rvn_"); xvmsg C "Cfg lines final: $t"
+  if [ ! "$1" ]; then cfCFGFN="$cfCFG"; cfETCDIR="${cfCFG%/*}"
+    if ! cfq buf cfgdata || ! vfsetbundle cVFLT_GLOBAL buf cf; then error "Global cfg error" && return 1; fi
+    cf_query buf '.Nodes|length';                        ((buf)) || warn  "No nodes configured!"
+  fi
+  :
+}
+# Query the cfg
+# 1: result buf name, or '-' for stdout
+# 2: yq query expression
+# [3..7]: values to pass as P1...5
+cf_query (){ local -i r=0; local qr
+  qr=$(P1="$3" P2="$4" P3="$5" P4="$6" P5="$7" "$cfBIN_YQ" "$2" <<<"$aCFGCACHE" 2>/dev/null) || {
+    error "Cfg query: \"$(P1="$3" P2="$4" P3="$5" P4="$6" P5="$7" "$cfBIN_YQ" "$2" <<<"$aCFGCACHE" 2>&1)\""
+    qr=""; r=1
+  }
+  [ "$qr" == "null" ] && qr=""
+  [ "$1" = '-' ] && echo "$qr" || printf -v "$1" '%s' "$qr"
+  ((!r))
+}
+cfq (){ cf_query "$1" "${cYQ_QUERY[$2]}" "${@:3}";}
+# Get all schedule qlist names
+cf_getscheds (){ local l
+  aJQIA=(["@|schedule"]=1) # '@' is always a schedule qname
+  while read -r l; do [ "$l" ] && aJQIA[$l|schedule]=1; done < <(cfq - schednames "*" "$cYP_JCFLT")
+}
+
+chk_conffile (){ [ "$cfCFGFN" ] || exit_err "Cfg file required for $aCMDNAME!"; cf_getscheds; }
+# Check if file $1 may be dumped to
+chk_dumpfile (){ local t; [ ! "${1:0:1}" = "~" ] && t=$(realpath "$1" 2>/dev/null) && [ ! -d "$t" ]; }
+# Check if owner=root && o-* for file $1
+chk_fileperms (){ local t; t=$(stat --printf='%u|%a' "$1" 2>/dev/null) && ((${t%%|*} + (0${t##*|} & 7) == 0)); }
+# Check if the path $1 looks safe to use, $2="notmp" to exclude /tmp & tmpfs
+chk_safepath (){ local p=${1%%+(/)} t; local bda=(/bin/ /boot/ /dev/ /etc/ /lib/ /proc/ /run/ /sbin/ /sys/ /usr/)
+  [[ "$p" = "/"* ]]            || return 1
+  t=${p//[!\/]} && ((${#t}<2)) && return 1
+  t="$p"; while [ "$t" ] && ! p=$(realpath -e "$t" 2>/dev/null); do t=${t%/*}; done
+  if [ "$2" = "notmp" ]; then
+    [ "$(df --output=fstype "$p/" | tail -n 1 2>/dev/null)" = "tmpfs" ] && return 1
+    bda+=(/tmp/)
+  fi
+  for t in "${bda[@]}"; do [[ "$p/" = "$t"* ]] && return 1; done
+  :
+}
+# Check if $1 exists in absolute or mangled path
+chk_suppfile (){ local f; [ ! "$1" ] && return 0
+  if [ ! "${1:0:1}" = "/" ]; then
+    [ "${1:0:1}" = "~" ] && echo "$1" && return 1
+    [ "${1:0:1}" = "." ] && set -- "$xIWD/$1" || set -- "$cfETCDIR/$1"
+  fi
+  f=$(realpath "$1" 2>/dev/null) || f="$1"
+  # abusing iconv to exclude binaries as "file" wants more beef than the suppfiles may have
+  echo "$f" && [ -f "$f" ] && iconv -f utf-8 -t utf-8 "$f" &>/dev/null
+}
+# Check conformance of $1 with char restriction class $2
+chk_varclass (){ local t=${cVCHK_DEFS[$2]}; [ "$t" ] || return 0
+  if [ "${t:0:1}" = "!" ];
+  then t="${t:1}"; [[ "$1" =~ $t ]] || return 1
+  else             [[ "$1" =~ $t ]] && return 1
+  fi
+  :
+}
+# Check if statedir and mountdir can be used
+chk_workdirs (){
+  [ "$cfSTATEDIR" ]                        || exit_err "No statedir configured!"
+  chk_safepath "$cfSTATEDIR" notmp         || exit_err "Cannot use '$cfSTATEDIR' as statedir!"
+  if [ "$cfMOUNTDIR" ]; then
+    [[ ! "$cfMOUNTDIR" = "$cfSTATEDIR"* ]] && \
+    [[ ! "$cfSTATEDIR" = "$cfMOUNTDIR"* ]] || exit_err "statedir and mountdir must be separate!"
+    chk_safepath "$cfMOUNTDIR"             || exit_err "Cannot use '$cfMOUNTDIR' as mountdir!"
+    mkdir -p "$cfMOUNTDIR" &>/dev/null     || exit_err "Could not assure mountdir!"
+  fi
+  mkdir -p "$cfSTATEDIR/jlast" &>/dev/null || exit_err "Could not assure statedir!"
+}
+
+# Check if we got the executable $1 available
+dowehave (){ case $1 in ""|DISABLED) false;; *) hash "$1" &>/dev/null;; esac; }
+# Check for needed/desired tools
+chk_installed (){ local -i r=0; local -a ra; local v
+  _instbins_flt (){ local -n a_=$1
+    ra=(); for v in "${a_[@]}"; do dowehave "$v" || ra+=("$v"); done
+  }
+  _instbins_lst (){
+    ((${#ra[@]}))   || return
+    # shellcheck disable=SC2046
+    msg_chklev "$2" || return
+    msg "$1" "$2"
+    for v in "${ra[@]}"; do msg "\t$v"; done
+  }
+  _instbins_flt aBINS_REQ
+  _instbins_lst "Required but missing:" ERROR && r=1
+  _instbins_flt aBINS_OPT
+  _instbins_lst "Desired but missing:"  INFO  && info "Some things may not work"
+  ((!r))
+}
+# Get infos for the borg client acc. to global key $1 into the next free aBORGS slot, or slot $2 when given
+add_borg (){ local -i i=0; local b cf="cf${1^^}" k="${1,,}"; b=${!cf}
+  # Get borg version infos for $1 into aBORGS slot $2
+  _getbv (){ local n v
+    v=$("$1" -V 2>/dev/null) || return 1
+    v="${v##* }"
+    vsn_int n "$v" 011
+    ((n)) || return 1
+    xvmsg C "Checked borg #$2: vn=$n vs='$v' cmd=$1"
+    aBORGS[$2|vn]="$n"; aBORGS[$2|vs]="$v"
+  }
+  [ "$2" ] && i="$2" || while [ "${aBORGS[$i|vn]}" ]; do ((i++)); done
+  dowehave "$b" && _getbv "$b" "$i" && { aBORGS[$i|cf]="$k"; aBORGS[$i|cmd]="$b"; }
+}
+# Get % check std. borg against (officially) allowed versions
+chk_borg (){ local vn
+  dowehave "$cfBIN_BORG" || return 0 # no nagging here if no/disabled borg
+  add_borg bin_borg 0 && vn="${aBORGS[0|vn]}" || vn=0
+  ((vn<${cBORG_VNRANGE%-*} || vn>${cBORG_VNRANGE#*-})) && error "Bad borg version: ${aBORGS[0|vs]:-(none found)}!" && return 1 || :
+}
+# Get all borgs into aBORGS and set std. aBORGCMD, aBORGVN
+get_borgs (){ local -a ia; local b k
+  ((${#aBORGS[@]})) || add_borg bin_borg 0 # get the std if not already present
+  aBORGCMD="${aBORGS[0|cmd]}"; aBORGVN="${aBORGS[0|vn]:-0}"
+  readarray -t ia < <(compgen -A variable "cfBIN_BORG_")
+  for b in "${ia[@]}"; do k="${b:2}"; k="${k,,}"
+    add_borg "$k" || warn "Cannot use '$k' (${!b})"
+  done
+}
+# Get best matching borg's index into var $1 for version spec $2
+sel_borg (){ local -n r_="$1"; local -i i_=0; local -a ma_; local v_
+  _bvmsa (){ #  get matches per regex, pattern, or num
+    while [ "${aBORGS[$i_|vn]}" ]; do
+      # shellcheck disable=SC2053
+      case $1 in p) [[ "${aBORGS[$i_|vs]}" = $2 ]];; r) [[ "${aBORGS[$i_|vs]}" =~ $2 ]];; *) [[ "${aBORGS[$i_|vn]}" = $2* ]];; esac
+      ((!$?)) && ma_[$i_]="${aBORGS[$i_|vn]}" && { ((!i_)) && break; }; ((i_++)) # sparsely reg. matched i with their vn, breaking when 0 matches
+    done
+  }
+  case $2 in "") ma_[0]="${aBORGS[0|vn]}";;     # no/empty spec => use std. client
+           sh:*) _bvmsa p "${2:3}";; re:*) _bvmsa r "${2:3}";;  # use explicit method
+              *) if [ "${2//[0-9]}" = "" ]; then v_=n; elif [[ "$2" =~ [$|{}^] ]]; then v_=r; else v_=p; fi
+                 _bvmsa "$v_" "$2";;                            # use plausible method
+  esac
+  v_=0; r_=-1; for i_ in "${!ma_[@]}"; do
+    ((!i_)) && { r_=0; break; } # std. client matched, so take it
+    ((${aBORGS[$i_|vn]}>v_)) && { r_=$i_; v_="${aBORGS[$i_|vn]}"; }
+  done
+  ((r_>=0))
+}
+# Check if we got the proper getopt
+chk_getopt (){ getopt -T &>/dev/null; (($? == 4)); }
+# Check if systemd-analyze gives our expected output
+chk_oncal (){ dowehave "$cfBIN_ONCAL" || return 0 # no nagging here if no/disabled oncal
+  local -a ia; readarray -t ia < <(oncal_eval "*" "Thu-Sat 1:2:3" @2942978400)
+  [ "${ia[1]}" = "Thu..Sat *-*-* 01:02:03" ] && [ "${ia[2]:4:9}" = "2063-04-0" ] && [ "${ia[2]:15:8}" = "01:02:03" ] && return 0
+  error "Compatibility check failed for $cfBIN_ONCAL!" && return 1
+}
+# Check for proper yq, getting version string along
+chk_yq (){ local v t u
+  _yqbaderr (){ error "$1 yq found. Pls. make sure you install this one: (https://github.com/mikefarah/yq/)."; }
+  ! dowehave "$cfBIN_YQ"      && _yqbaderr "No"    && return 1
+  v=$("$cfBIN_YQ" -V 2>/dev/null)
+  [[ "$v" != yq*mikefarah* ]] && _yqbaderr "Wrong" && return 1
+  vsn_int aYQVN "$v" 021
+  xvmsg C "Checked yq: vn=$aYQVN vs='${v##* }'"; :
+}
+# Bundled check for essential prerequisites
+chk_pre (){ local -i r=0
+  [ "$aYQVN" ] || chk_yq || r=1
+  [[ "$cfBIN_SNAPPER" =~ ^$|^DISABLED$ ]] && info "DISABLED snapper"    || aBINS_OPT+=("$cfBIN_SNAPPER" "btrfs")
+  [[ "$cfBIN_BORG"    =~ ^$|^DISABLED$ ]] && info "DISABLED borg"       || aBINS_OPT+=("$cfBIN_BORG")
+  [[ "$cfBIN_ONCAL"   =~ ^$|^DISABLED$ ]] && info "DISABLED SCHEDULING" || aBINS_OPT+=("$cfBIN_ONCAL")
+  chk_installed || r=1
+  ! dowehave "$cfBIN_BORG" && ! dowehave "$cfBIN_SNAPPER" && error "Neither borg nor snapper found or enabled!" && r=1
+  chk_borg      || r=1
+  chk_oncal     || r=1
+  ((r)) && exit_err "Essential prerequisite(s) missing!"
+}
+
+# Get all path->cfgname mappings from snapper into (new/cleared) result hash $1
+# Uses only the first one in case of multiple configs with the same path
+snapper_getnames (){ local -a ia; local l; aSNM=()
+  dowehave "$cfBIN_SNAPPER" || return 1
+  readarray -t ia < <("$cfBIN_SNAPPER" --csvout --no-headers --separator "|" list-configs 2>/dev/null)
+  for l in "${ia[@]}"; do [ "${aSNM[${l#*|}]+set}" ] || aSNM[${l#*|}]="${l%|*}"; done
+  :
+}
+
+##############################################################################
+# %General Processing
+
+# Initialize, process the running environment for infos and show them
+init (){ local l s t
+  timer_start GLOBAL
+  [ "$PWD" ] && xIWD="$PWD" || xIWD=$(pwd)
+  tty -s   && envTTY=1    || envTTY=0
+  [ -t 1 ] && envTTYOUT=1 || envTTYOUT=0
+  s=$(ps --no-headers -o comm 1 2>/dev/null)
+  [[ -d /run/systemd/system ]] && [ "$s" = "systemd" ] && envSYSD=1
+  envPARENT=$(ps -p $PPID -o comm --no-headers 2>/dev/null)
+  [ "$SYSTEMD_EXEC_PID" ] && envUNIT=$(ps -p "$SYSTEMD_EXEC_PID" -o comm --no-headers 2>/dev/null)
+  t="$envPARENT"; ((envTTY)) && t+="/${TERM:-dumbtty}" || l=info
+  if [ "$envUNIT" ] || [ "$TRIGGER_UNIT" ]; then
+    t+=" "; [ "$TRIGGER_UNIT" ] && t+="${TRIGGER_UNIT}:"; t+="${envUNIT:--}"
+  fi
+  ((envTTYOUT)) || cfOUTPUT_COLORS_ENABLED=0 # may be overridden later
+  set_colors
+  # register traps right away
+  trap  on_exit            EXIT
+  trap "on_signal SIGINT"  SIGINT
+  trap "on_signal SIGTERM" SIGTERM
+  trap "on_signal SIGHUP"  SIGHUP
+  [ "$aMYNAME" = "$cMYNAME" ] && s="" || s="$aMYNAME - "
+  msg "$s$cMYNAME v$cMYVERSION - uid $EUID $t" $l
+}
+
+# Check for snoozing -  and do so in case
+chk_snooze (){ local -i lrt st; local sfn="$cfSTATEDIR/_.snooze" tfn="$cfSTATEDIR/_.snooze_until" tft
+  while  [ -f "$sfn" ] || [ -f "$tfn" ]; do st="$cSNOOZE_CHK_SECS"
+    if [ -f "$tfn" ]; then
+      vdate tft "$tfn" FE && echo $((tft - EPOCHSECONDS)) && ((tft <= EPOCHSECONDS)) && rm -f "$tfn" &>/dev/null && continue
+      st=$((tft-EPOCHSECONDS)); ((st<cSNOOZE_CHK_SECS)) || st="$cSNOOZE_CHK_SECS"
+    fi
+    if ((EPOCHSECONDS-lrt >= cSNOOZE_RPT_SECS)); then
+      ((lrt)) && info "...snoozing..." || info "SNOOZE found demanded..."
+      lrt="$EPOCHSECONDS"
+    fi
+    snore "$st"
+  done
+  ((lrt>0)) && info "...ended"
+}
+
+# Check if the 'unclean' semaphore is set, calling cleanup right away when
+# running as root (and exclusively) AND $1 != W
+# Call for cleanup BEFORE setting an own one!
+chk_unclean (){
+  chk_pidlock               || return 0   # no action if another instance is running
+  [ -f "$cfSTATEDIR/.cln" ] || return 0   # no semaphore
+  warn "Prior unclean exit detected"
+  { ((EUID)) || [ "${1^^}" = "W" ]; } && warn "Run '$aMYNAME reset --stale' soon!" && return 1
+  info "Performing late cleanup"
+  clean_late
+}
+set_unclean (){ local f="$cfSTATEDIR/.cln"; : >"$f"; xTMPFILES+=("$f"); }
+# Clean up after unclean exit
+clean_late (){ local -a sa sca; local m pl pt sc sd si st; local -i r=0
+  if ((EUID)) || ! chk_pidlock; then
+    warn "Late cleanup requires root and no other running instances"
+    return 1
+  fi
+  set_pidlock # to be sure
+  clr_bmnts error || r=1
+  # The rest is snapshot related
+  if dowehave "$cfBIN_SNAPPER"; then
+    pl="${cfSNAPSHOT_LOCK_PREFIX:n0mA7Hc}"
+    pt="${cfSNAPSHOT_TEMP_PREFIX:n0mA7Hc}"
+    # We loop thru all SNAPPER configs instead of our nodes. This is not affected by
+    # intermediate changes to our cfg, and often quicker here.
+    readarray -t sca < <("$cfBIN_SNAPPER" --csvout --no-headers list-configs --columns config 2>/dev/null)
+    for sc in "${sca[@]}"; do
+      readarray -t sa < <(run_snapper - "$sc" --jsonout list -t single --disable-used-space --columns number,cleanup | \
+        "$cfBIN_YQ" -pj -r " .$sc | map(select((.cleanup|test(\"^($pl)|($pt)\")) and .number!=0)) | to_entries | .[] |
+        (.value.number +\"|\"+.value.cleanup)" 2>/dev/null)
+      for sd in "${sa[@]}"; do
+        si=${sd%%|*}; si=${si//[!0-9]} # in case snapper added 'comfy' extra chars
+        st=${sd#*|}
+        m="'$st' tagged snapshot #$si for snapper cfg '$sc'"
+        if   [[ "$st" = "$pl"* ]]; then ! run_snapper log "$sc" modify -c "${st:${#pl}}" "$si" && error "Error unlocking $m" && r=1
+        elif [[ "$st" = "$pt"* ]]; then ! run_snapper log "$sc" -q delete "$si" && error "Error deleting $m" && r=1
+        fi
+      done
+    done
+  fi # snapshot stuff
+  ((r)) && warn "Cleanup finished with problems" || info "Cleanup finished ok"
+  [ "$cfSTATEDIR" ] && rm -f "$cfSTATEDIR/.cln" &>/dev/null     # clear semaphore regardless of probs
+  ((!r))
+}
+
+# Exit Trap, cleaning & summing up on the way out
+on_exit (){ local -i c r; local f t # localize to have clean vars
+  unset aMSGPRE; unset cfDRYRUN     # clear all msg prefixing!
+  cd "$xIWD"                        # we may be inside a mounted tree!
+  if ((!EUID && !aCOMPET)); then
+    if get_cpids cpa; then snore 1; get_cpids cpa && kill -TERM "${cpa[@]}" 2>/dev/null; fi # SIGTERM remaining childs after 1s
+    clr_bmnts error; c=$?  # clear ANY still present bmounts
+    for t in "${xTMPSNAPS[@]}"; do
+      ! run_snapper - "${t#*|}" -q delete "${t%%|*}" >/dev/null && \
+        error "Could not delete temp. snapshot #${t%%|*} for snapper cfg '${t#*|}'" && c=1
+    done
+    for t in "${!xSNAPLOCKS[@]}"; do
+      ((xSNAPLOCKS[$t])) && ! node_snaplocks_clr "$t" silent && error "Could not unlock snapshot(s) for node '$t'" && c=1
+    done
+    if [ -d "$xIPCDIR" ]; then
+      for f in "$xIPCDIR"/*.amnt; do t=$(< "$f")
+        { [ "$t" ] && get_mnttarget "$t" >/dev/null; } || continue
+        xvmsg N "Unmounting automounted $t"
+        ! umount "$t" &>/dev/null && warn "Could not unmount $t" && r=1 # NOT c, cannot late clean these
+      done
+      clean_ipc
+    fi
+  fi
+  for t in "${xTMPFILES[@]}"; do
+    { [ -f "$t" ] || [ -L "$t" ]; } && ! rm -f "$t" &>/dev/null && warn "Could not remove $t" && r=1 # NOT c, cannot late clean these
+  done
+  ((c + r)) && warn "Exiting with cleanup problems"
+  ((c))     && warn "Try correcting with '$aMYNAME reset --stale'"
+  sum_notify
+  if   ((xSUM_INFO[errors])); then error "Finished with $((xSUM_INFO[errors])) error(s), $((xSUM_INFO[warnings])) warning(s)"
+  else ((xSUM_INFO[warnings]))  && warn  "Finished with $((xSUM_INFO[warnings])) warning(s)"
+  fi
+  ((aSHOW_RUN_TIME)) && timer_time GLOBAL t && info "Finished after ${t}s"
+  ((aCOMPET)) || clr_pidlock
+  :
+}
+# Sigtrap to log interruptions and reg for summing
+on_signal (){ local -a cpa; local aMSGPRE # hide any existing msg prefix!
+  warn "Got $1"
+  [ "${cfSUM_INFO[exit_reason]}" ] || xSUM_INFO[exit_reason]="$1"
+  get_cpids cpa
+  trap - INT TERM HUP; kill -"$1" $$ "${cpa[@]}" 2>/dev/null
+}
+
+# Exit with optional errmsg $1
+exit_err (){
+  [ "$1" ] && error "$1"
+  [ "${cfSUM_INFO[exit_reason]}" ] || xSUM_INFO[exit_reason]="ERR"
+  exit 1
+}
+
+##############################################################################
+# %IPC & Related
+
+# Check/acquire/clear pidlock, single option in [$1]:
+#  S: actually set/acquire lock, INCLUDES check for root, and failure exits
+#  C: clear own lock
+# Note a set lock is NOT added to xTMPFILES for automated deletion as we have to acquire short lived ones as well
+chk_pidlock (){ local -i i; local p pfd="/run/$aMYNAME"; local pfn="$pfd/${aMYNAME}.pid"
+  _chk_pidlock (){
+    aCOMPET=0
+    if [ -L "$pfn" ] || [ -f "$pfn" ]; then
+      if p=$(realpath "$pfn" 2>/dev/null) && p="${p##*/}" && [ "$p" = "${p//[!0-9]}" ] && [ "$(ps -o comm --no-headers -p "$p" 2>/dev/null)" = "$aMYNAME" ];
+      then [ "$p" = "$$" ] && return 0 || { aCOMPET=1; return 1; }
+      fi
+      p=0                       # overwrite curr value with a safe integer
+      rm -f "$pfn" 2>/dev/null  # quietly try to rm stale/bad ones, ok to fail when not root
+    fi
+    :
+  }
+  _set_pidlock (){ _chk_pidlock && mkdir -p "$pfd" && ln -fns $$ "$pfn" 2>/dev/null && p=$$; }
+  case "${1^^}" in
+     S) ((EUID)) && exit_err "$cMSG_EROOT"
+        if ! _set_pidlock; then
+          ((cfPIDLOCK_MAXWAITS)) && info "PID locked, retrying for max. ${cfPIDLOCK_MAXWAITS}s"
+          for ((i=cfPIDLOCK_MAXWAITS; i>0 && p != $$; i--)); do snore 1; _set_pidlock && break; done
+        fi
+        if ((p != $$)); then
+          ((cfPIDLOCK_SURRENDER)) && { info "PID locked"; exit 0; } || exit_err "PID locked"
+        fi
+        ;;
+     C) _chk_pidlock && rm -f "$pfn" 2>/dev/null;;
+     *) _chk_pidlock;;
+  esac
+}
+set_pidlock (){ chk_pidlock S; }
+clr_pidlock (){ chk_pidlock C; }
+
+# Init/clear the IPC subdir, use only AFTER ensuring a pidlock
+init_ipc (){
+  ((EUID)) && exit_err "$cMSG_EROOT"  # just to be sure
+  xIPCDIR="/run/$aMYNAME/ipc"
+  [ -d "$xIPCDIR" ] && rm -rf "$xIPCDIR" 2>/dev/null        # assure we got a clean (and properly umasked) one!
+  (umask 077; mkdir -p "$xIPCDIR" 2>/dev/null) || return 1  # priv. umask!
+}
+clean_ipc (){ [ ! -d "$xIPCDIR" ] || { [[ "$xIPCDIR" = "/run/$aMYNAME"* ]] && rm -rf "$xIPCDIR" 2>/dev/null; } } # rm -rf only with add. check!
+
+# Generic ipc locks, $1: name, [$2]: num_retries (1/s) for setting, F)orced flag for clearing
+set_lock (){ local l="$xIPCDIR/$1.lock" n="${2:-1}" p
+  [ -w "$xIPCDIR" ] && until { ln -s "$aPID" "$l" 2>/dev/null && p="$aPID"; } || \
+                             { p=$(realpath "$l" 2>/dev/null) && p="${p##*/}" && [ "$p" = "$aPID" ]; } || \
+                             ! ((n--)); do snore 1
+                       done
+  [ "$p" = "$aPID" ]
+}
+clr_lock (){ local l="$xIPCDIR/$1.lock" p
+  [[ "$2" = *F* ]] && [ -w "$xIPCDIR" ] && rm -f "$l" 2>/dev/null # Forced clear
+  [ ! -L "$l" ] || { p=$(realpath "$l" 2>/dev/null) && [ "${p##*/}" = "$aPID" ] && rm -f "$l" 2>/dev/null; }
+}
+
+##############################################################################
+# %Utility (General)
+
+# Add contents of assoc ary $2 to $1
+add_A (){ local -n t_="$1" s_="$2"; local k; for k in "${!s_[@]}"; do t_[$k]="${s_[$k]}"; done; }
+# Copy assoc ary $2 as/over $1 (global)
+cpy_A () { local -n s_="$2"; "${s_[@]@A}" && declare -gA "$1"="${_#*=}"; }
+
+# Clean away all our bind mounts,
+# optionally reporting errors with level $1
+clr_bmnts (){ local t; local -i r=0
+  [ "$cfMOUNTDIR" ] || return 0
+  for t in "$cfMOUNTDIR/"*; do
+    if [ -d "$t" ]; then # the dirs in mountdir are the node names OR equivalent
+      if ! node_bmnts_clr "${t#"$cfMOUNTDIR"/}"; then  [ "$1" ] && msg "Could not unmount $t" "$1"; ((r++)); fi
+    fi
+  done
+  return "$r"
+}
+
+# get (direct) child pids into ary $1
+get_cpids (){ readarray -t "$1" < <(ps --no-headers -o pid --ppid $$); unset "$1[-1]"; [ "${!1}" ]; } # last one is ps call
+# Get curr. mounted target path for path/glob $1
+get_mnttarget (){ local -a la ma; local -i i; local t
+  readarray -t ma </proc/self/mountinfo
+  # ma is in mount order, and we may have overmounts, so always take the last one only
+  # shellcheck disable=SC2206
+  for ((i=${#ma[@]}; i>0; )); do la=(${ma[((--i))]}); printf -v t "${la[4]}" # get target, decoding escapes!
+    # shellcheck disable=SC2053
+    [[ "$t" = $1 ]] && echo "$t" && return 0
+  done
+  return 1
+}
+
+# Timings
+timer_start (){ vtnow "tT_$1"; }                # Start timer $1
+timer_kill  (){ unset "tT_$1"; }                # Kill  timer $1
+timer_time  (){ local -n ts_="tT_$1"; local tv_ # Get elapsed time for timer $1 into $2
+  [ "$ts_" ] || return 1
+  vtnow tv_; ((tv_-=ts_))
+  printf -v tv_ '%.1u.%.6u' "$((tv_/1000000))" "$((tv_%1000000))"
+  printf -v "$2" '%01.3f' "$tv_"
+}
+# sleep() replacement w/o subproc, with timeout $1 or "forever" if omitted
+# credits to "boltblog" (https://blog.dhampir.no/content/sleeping-without-a-subprocess-in-bash-and-how-to-sleep-forever)
+# shellcheck disable=SC2120
+snore (){ local IFS
+  [[ -n "${_snore_fd:-}" ]] || { exec {_snore_fd}<> <(:) && read -t 0 -ru $_snore_fd; }
+  read ${1:+-t "$1"} -ru "$_snore_fd" || :
+}
+tsdate (){ date '+%s' -d "$1" 2>/dev/null; }
+# Calc epochal date relative to a given one
+# 1: offset (e.g. "-1 day")
+# [2]: base date (epochal), or none for now
+tsdate_rel (){ local -i e
+  e=$(tsdate "$1") || return 1
+  [ "$2" ] && echo $((e - EPOCHSECONDS + $2)) || echo "$e"
+  :
+}
+# Get normalized date into var $1 from $2, options in [$3]:
+#  E: give result in epoch seconds, F: input is a filename
+vdate (){ local d f o
+  [[ "$3" = *F* ]] && o="-r"  || o="-d"
+  [[ "$3" = *E* ]] && f='+%s' || f='+%F %T'
+  d=$(date "$f" "$o" "$2" 2>/dev/null) || d=""
+  printf -v "$1" '%s' "$d"
+  [ "$d" ]
+}
+# get current EPOCHREALTIME into var $1 as µs int
+vtnow (){ local -r f='0000000000000000'; local t=${EPOCHREALTIME//[!0-9]}
+  [ "$1" ] && printf -v "$1" '%s' "$t${f:${#t}}" || echo "$t${f:${#t}}"
+}
+
+# Var testing & setting
+# Fixup var $1 according to scheme $2, default value $3
+vffix (){ local -n vn_="$1" sn_="cVFIX_$2"; local v="${vn_,,}"
+  [ "${sn_[$v]+set}" ] && vn_="${sn_[$v]}" || vn_="$3"
+}
+# Test var for key name $2 against filter ary $1 with value i/o via $3
+vfset (){ local -n fn_=$1 rn_=$3; local f fm cn fup
+  for f in "${fn_[@]}"; do fm="${f%:*}"
+    # shellcheck disable=SC2053
+    if [[ "$2" = $fm ]]; then
+      ((!cfGURU_NO_WARN_WILD_KEY)) && [ "$fm" = "*" ] && warn "Unexpected key '$2'"
+      if [[ $f = *:* ]]; then cn="${f##*:}"
+        ! chk_varclass "$rn_" "$cn" && cfgerr "Bad value for '$2': '$rn_'" && return 1
+        if [ "$cn" = "bool" ]; then [ "$rn_" = "true"  ] && rn_=1; [ "$rn_" = "false" ] && rn_=0
+        else fup="${cVFIX_LOOKUP[${2,,}]}"; [ "$fup" ] && vffix rn_ "${fup%%:*}" "${fup#*:}"
+        fi
+      fi
+      return 0
+    fi
+  done
+  ((cfGURU_ALLOW_ANY_KEY)) || { cfgerr "Illegal key '$2'"; return 1; }
+}
+# Set a bunch of vars from k=v buffer $2, tested against $1, output opt. prefixed with $3
+vfsetbundle (){ local -n flt_=$1 buf_=$2; local -i p r=0; local a l k v
+  while read -r l; do [[ "$l" != *"="* ]] && continue
+    k=${l%%=*}; v=${l#*=}; p=1
+    ! vfset flt_ "$k" v && r=1 && continue
+    for a in "${!cVF_2ARY[@]}"; do  # place in ary instead of var?
+      [[ "$k" = "$a"* ]] && local -n vfa_="${cVF_2ARY[$a]}" && vfa_[${k/$a}]="$v" && p=0 && break
+    done
+    ((p)) && ! printf -v "$3${k^^}" '%s' "$v" && r=1
+  done <<<"$buf_"
+  ((!r))
+}
+# Get "type" of var $1 in local scope, as -|i|a|A in 1st char & further attribs following
+vtype (){ local t
+  t=$(declare -p "$1" 2>/dev/null) || return 1
+  t="${t:9}"; t="${t// */}"; [[ "$t" =~ [Aai] ]] || t="-$t"
+  echo "$t"
+}
+
+# Cvt dotted version $2 to int using scheme $3, into var $1, ignoring non-numeric pre-/postfixes
+# Scheme $3 has to contain an indicator for each part to cvt:
+#  0: take as is, 1..9: limit to this many digits, pad/limit as needed
+vsn_int (){ local -a ia; local -i i; local r s t
+  t="${2%%[0-9]*}"; s="${2#"$t"}"; s=${s%%[!0-9.]*} # strip surrounding stuff
+  readarray -td. ia <<<"$s"
+  for ((i=0; i<${#3}; i++)); do t=${3:$i:1}; s=${ia[i]//[!0-9]}; s=$((10#${s:-0}))
+    case $t in
+      [1-9]) ((s<10**t)) || s=$((10**t-1)); r+=$(printf '%0*d' "$t" $s) ;;
+          0) r+=$s ;;
+    esac
+  done
+  printf -v "$1" '%s' $((10#${r:-0}))
+}
+
+##############################################################################
+# %Color Stuff
+
+# Colored printf (sans -v option), using our registered color name as $1 before the format
+cprintf (){ local col="${aCOLORS[$1]}" f="$2" l lf
+  shift 2
+  if ((cfOUTPUT_COLORS_ENABLED)); then
+    # Colors we need to set & reset within lines, or they will bleed across when
+    # the output is e.g. piped thru 'ts'. So rebuild the format param accordingly.
+    while [ "$f" ]; do
+      [ "${f::2}" = "\n" ] && lf+="\n" && f="${f:2}" && continue
+      l="${f%%\\n*}"  # left part before 1st \n
+      f="${f:${#l}}"  # rest incl \n
+      lf+="$col$l"$'\e[0m'
+    done; f="$lf"
+  fi
+  printf "$f" "$@"
+}
+# Set colored output stuff
+set_colors (){ local -a maps; local info p v; local -i f=1
+  _ccfg_chg (){ local -i r
+    local s="$cfOUTPUT_COLORS_ENABLED-$cfOUTPUT_COLORS_MAX-$aTTYCOLORS-${cfOUTPUT_COLORS_SWAP// }-${#aCCF_CUSTOM[@]}"
+    [ "$aTTYCOLSIG" = "$s" ] && r=1
+    if inopts C && [ ! "$1" ] && [ "$aTTYCOLSIG" ]; then
+      ((!r)) && msg "CCf sig changed: $aTTYCOLSIG -> $s" ---C || msg "CCf sig unchanged: $s" ---C
+    fi
+    aTTYCOLSIG="$s"; ((!r))
+  }
+  _set_colors (){
+    aCOLORS=();
+    maps=(cCCF_B3);  ((aTTYCOLORS>15))  && maps+=(cCCF_B4)      # System basics 1st
+    if [ "$cfOUTPUT_COLORS_SWAP" ]; then                        # Swaps wanted?
+      ccf_proc aCOLORS "$aTTYCOLORS" 0 "${maps[@]}" || return 1 # OOPS!
+      # shellcheck disable=SC2086
+      ccf_swap aCOLORS . .b $cfOUTPUT_COLORS_SWAP
+      maps=()
+    fi
+    maps+=(cCCF_P3); ((aTTYCOLORS>255)) && maps+=(cCCF_P8)  # Presets
+    ((${#aCCF_CUSTOM[@]})) && maps+=(aCCF_CUSTOM)
+    ccf_proc aCOLORS "$aTTYCOLORS" "$cfOUTPUT_COLORS_RELAX" "${maps[@]}"
+  }
+  # not yet initialized?
+  if [ ! "$aTTYCOLORS" ]; then aTTYCOLORS=$(tty_numcolors); xvmsg C "TTY colors: $aTTYCOLORS"; fi
+  if ((cfOUTPUT_COLORS_ENABLED)); then
+    if ((aTTYCOLORS<8));
+      then cfOUTPUT_COLORS_ENABLED=0; xvmsg C "CCf disabled: insufficient capabilities ($aTTYCOLORS)"
+      elif _ccfg_chg; then
+        if ! _set_colors; then
+          ((${#aCCF_CUSTOM[@]})) && aCCF_CUSTOM=() && warn "Reverting to preset colors" && _set_colors && f=0
+          ((f)) && cfOUTPUT_COLORS_ENABLED=0       && warn "Colors disabled after CCf error" # OOPS!
+        fi
+        _ccfg_chg quiet
+    fi
+    else xvmsg C "Colors disabled"
+  fi
+  ((cfOUTPUT_COLORS_ENABLED)) || aCOLORS=()
+}
+# Get max. colors supported by terminal
+tty_numcolors (){ local -i c=0; local t
+  if dowehave tput && t=$(tput setaf 0 sgr0 2>/dev/null); then # SGR with ANSI supported
+    c=$(tput colors 2>/dev/null)
+    if ((c<256)); then
+      [[ "$t" = *"30m"* ]]                                          && c=8
+      t=$(tput setaf 8   2>/dev/null) && [[ "$t" = *"90m"* ]]       && c=16
+      t=$(tput setaf 255 2>/dev/null) && [[ "$t" = *"38;5;255m"* ]] && c=256
+    fi
+  fi
+  [[ $COLORTERM =~ ^(truecolor|24bit)$ ]] && c=$((2**24)) # assuming full SGR features along
+  ((c)) && echo "$c" || echo 2
+  ((c))
+}
+
+# ----------------------------------------------------------------------------
+# ccf_* Color Cfg Stuff
+#
+# CCF Error Output
+# 1:status
+ccf_err (){ local e="${1//\\/\\\\}" m
+  case $e in *MAX*) m="unsuited for current max. tty colors";;
+         *"SGR BAD"*) m="contains bad SGR code";;
+             *NOKEY*) m="contains an undefined key";;
+              *LOOP*) m="gives a reference loop";;
+                   *) m="gives an unspecified error";;
+  esac
+  cfgerr "Color specifier $m (${e:2})"
+}
+# Cvt $1 6-digit hex rgb to "idxval|dist|r;g;b", dist==0 is exact match
+ccf_hexsgr (){ local -a irgb crgb vrgb ; local -i i v dc dg ig vg; local t o
+  local -ra cube=(0 95 135 175 215 255) # cube stops (0x00 0x5f 0x87 0xaf 0xd7 0xff)
+  _sgr8nci (){ local -i a   # get nearest cube index
+    if (($1 < 80)); then (($1 > 7)) && a=7 || a="$1"; else a=35; fi
+    echo $((($1-a)/40))
+  }
+  _sgr8dst (){              # get sq. dist. of $1..3 to orig. rgb values
+    echo $(((($1-vrgb[0])*($1-vrgb[0]))+(($2-vrgb[1])*($2-vrgb[1]))+(($3-vrgb[2])*($3-vrgb[2]))))
+  }
+  #((${#1} == 6)) && ((16#$1)) 2>/dev/null || return 1     # not needed when prechecked
+  for i in 0 1 2; do t="${1:$((i*2)):2}"
+    v=$((16#$t)); vrgb[$i]=$v; o+=";$v"                   # rgb dec val, append to exact output part
+    v=$(_sgr8nci "$v"); irgb[$i]=$v; crgb[$i]=${cube[$v]} # cube idx & dec val
+  done
+  dc=$(_sgr8dst "${crgb[0]}" "${crgb[1]}" "${crgb[2]}")   # c dst
+  v=$(((vrgb[0]+vrgb[1]+vrgb[2])/3))                      # g avg
+  ((v>238)) && ig=23 || ig=$(((v-3)/10))                  # g idx
+  vg=$((8+(10*ig)))                                       # g dec val
+  dg=$(_sgr8dst "$vg" "$vg" "$vg")                        # g dst
+  ((dg < dc)) && printf -v t '%03u|%u' "$((232+ig))" "$dg" || printf -v t '%03u|%u' "$((16+(36*irgb[0])+(6*irgb[1])+irgb[2]))" "$dc"
+  echo "$t|${o:1}"
+}
+# Workhorse for ccf_proc
+# 1:target aary 2:key 3:value 4:maxcolors 5:status var 6:no_maxcolor_check flag 7:pushback flag
+ccf_parse (){ local -n ca_=$1 st_=$5; local r mc="$4" nc="$6" pb="$7"; local -i rv
+  local -i delnul=0 # delete empty ones?
+  _ccf_isseq (){ [[ "$1" =~ [[:space:],|]+ ]]; }
+  _ccf_issgr (){ [ "${1:0:2}" = "\\e" ] || [ "${1:0:1}" = $'\e' ]; }
+  _ccf_ishex (){ ((${#1} == 6)) && ((16#$1>=0)) 2>/dev/null; }
+  _ccf_isidx (){ ((${#1} < 4))  && [ ! "${1//[0-9]}" ] && ((10#$1<256)); }
+  _ccf_okref (){ [[ "$1" =~ ^[A-Za-z+-./:^_~][A-Za-z0-9!%*+-./:@^_~]*$ ]]; }
+  _ccf_okmax (){ ((!nc)) && ((mc<$1)) && [[ "$2" =~ ${3:-.*} ]] && st_="E MAX:$mc" && return 1 || :; }
+  # inner func for local recursion despite of nameref $ca_
+  # 1:key 2:value 3:no_apply flag
+  _ccf_parse_descend (){ local -a seq; local id o se sr
+    local -r refpat="^[A-Za-z0-9+-.:!/@_~^]+$"
+    [ "${ca_[$1]+set}" ] && o="=" || o="+"
+    if [ ! "$2" ];
+      then if ((!delnul)); then  r="";                   id=NUL
+           else unset "ca_[$1]"; st_="- DEL NOVAL:$1";   return 0   # Delete
+           fi
+    elif _ccf_isseq  "$2"; then IFS=' ,|'$'\t' read -ra seq <<<"$2" # Sequence
+      for se in "${seq[@]}"; do
+        if ((pb)); then # assemble & check refs for the caller's comfort
+          [ "$se" = "$1" ]   &&  st_="E SEQ REF LOOP" && return 1
+          _ccf_okref "$se" && ! _ccf_ishex "$se" && sr+=" $se"
+        elif _ccf_parse_descend "$1" "$se" 1; then sr+="$r" # assemble for setting
+        else                     st_="E SEQ${st_:1}";    return 1
+        fi
+      done
+      ((pb))                  && st_="P SEQ REFS$sr"  && return 0   # pushback
+      r="$sr";                                             id=SEQ
+    elif _ccf_issgr  "$2"; then  r="$2";                   id=SGR   # Full SGR cmd(s)
+      [[ ! "$2" =~ ^(($'\e'|\\e)\[[0-9\;]*m)+$ ]] && \
+                                 st_="E SGR BAD:'$2'" && return 1
+      _ccf_okmax  256 "$2" "38\;5\;"                  || return 1
+      _ccf_okmax  257 "$2" "38\;2\;"                  || return 1
+    elif _ccf_ishex  "$2"; then  r=$(ccf_hexsgr "$2");   id=HEX     # Hex value ...
+      _ccf_okmax  256                                 || return 1
+      ((mc>256)) && r="\e[38;2;${r##*|}m" || r="\e[38;5;${r%%|*}m"  # SGR rgb or idx
+    elif _ccf_isidx  "$2"; then  r="\e[38;5;${2}m";      id=IDX     # SGR idx value
+      _ccf_okmax  256                                 || return 1
+    elif _ccf_okref  "$2"; then                                     # Keyref
+      [ "$2" = "$1" ]         && st_="E REF LOOP"     && return 1
+      ((pb))                  && st_="P REF"          && return 0   # pushback
+      [ ! "${ca_[$2]+set}" ]  && st_="E REF NOKEY:$2" && return 1
+      r="${ca_[$2]}";                                    id=REF
+    else                         st_="E GEN BAD:'$2'";   return 1   # Bad Specifier
+    fi
+    (($3)) || ca_[$1]="$r"
+    st_="$o $id $r"
+  }
+  _ccf_parse_descend "$2" "$3"
+}
+# Process color definitions
+# 1:final ary 2:maxcolors 3:no_maxcolor_check flag 4+:maps
+ccf_proc (){ local -n ccffin_="$1"; local -A cols defs pbck rfro; local -a seq; local -i r sc; local st k t
+  _ccf_isloop (){ local -a ka; local k # 1:key 2:value ext:rfro
+    [ "$2" ] || return 0
+    rfro[$2]+=" $1"
+    if [ "${rfro[$1]+set}" ]; then
+      rfro[$2]+="${rfro[$1]}"
+      read -ra ka <<<"${rfro[$1]}"; for k in "${ka[@]}"; do [ "${rfro[$k]+set}" ] && rfro[$2]+="${rfro[$k]}"; done
+    fi
+    [[ "${rfro[$2]} " = *" $2 "* ]] && st="E REF LOOP:$1" && ccf_err "$st" && return 1
+    :
+  }
+   # 1:map_ary 2:seq_ary 3:maxcolors 4:no_maxcolor_check flag 5:pushback flag
+  _ccf_proc (){  local -n ccfmap_="$1" ccfseq_="$2"; local -a ia; local -i r; local k v
+    for k in "${ccfseq_[@]}"; do v="${ccfmap_[$k]}"
+      ccf_parse cols "$k" "$v" "$3" st "$4" "$5" || r=1
+      case $st in E*) ccf_err "$st:$k"; r=1        ;;
+                  P*) pbck[$k]="$v"                ;;&
+            "P REF"*) _ccf_isloop "$k" "$v" || r=1 ;;
+            "P SEQ"*) v="${st:10}" # refs are listed after "P SEQ REFS"
+                      read -ra ia <<<"$v"; for v in "${ia[@]}"; do ! _ccf_isloop "$k" "$v" && r=1 && break; done;;
+      esac
+      ((r)) && break
+    done; ((!r))
+  }
+  (($2 < 8)) && error "CCf OOPS: Called for only $2 colors" && return 1
+  # shellcheck disable=SC2068
+  for k in ${@:4}; do add_A defs "$k"; done # re-splitting from $4 here to allow strings as well!
+  add_A cols ccffin_; sc="${#cols[@]}"
+  for k in "${!defs[@]}"; do seq+=("$k"); done
+  _ccf_proc   defs seq "$2" "$3" 1 || r=1   # Pass 1: add non-REFs
+  if ((!r && ${#pbck[@]})); then
+    seq=(); t="" # make sure pbcks with rfros are 1st
+    for k in "${!rfro[@]}"; do [ "${pbck[$k]}" ]        && seq+=("$k") && t+=" $k"; done
+    for k in "${!pbck[@]}"; do [[ ! "$t " = *" $k "* ]] && seq+=("$k"); done
+    _ccf_proc pbck seq "$2" "$3" 0 || r=2   # Pass 2: add REFs
+  fi
+  if ((r));
+  then xvmsg C "E CCf aborted in pass $r: $st"
+  else add_A ccffin_ cols; ((sc)) && t=updated || t=started
+       xvmsg C "CCf $t colmap with: ${*:4} (${#cols[@]})"
+  fi
+  ((!r))
+}
+# Swap individual regular/bright system color refs
+# 1:colory ary 2:regular prefix 3:bright prefix 4+:index nos to swap (0..7)
+ccf_swap (){ local -n ccffin_="$1"; local k v
+  xvmsg C "CCf swap regular/bright: ${*:4}"
+  # shellcheck disable=SC2068
+  for k in ${@:4}; do # re-splitting from $4 here to allow strings as well!
+    v="${ccffin_[$2$k]}"; ccffin_[$2$k]="${ccffin_[$3$k]}"; ccffin_[$3$k]="$v"
+  done
+}
+
+##############################################################################
+# %Externals
+
+# Run a cmd with dispatched outputs
+# 1:  '-' to echo full result, otherwise log-dump linewise
+# 2:  criticality (WARN|ERROR|..) to log with when result!=0
+# 3:  cmd title
+# 4+: actual cmd & args
+run (){ local o=$1 m="${2^^}" t="$3" r
+  # output dispatcher
+  _rout (){ local f=0 l buf
+    while read -r l; do
+      if [ "$o" != '-' ]; then
+        ((f++)) || info "🢃 $t Output"
+        cprintf cmdout '\t%s\n' "$l"
+      else buf+="$l\n"
+      fi
+    done
+    [ "$buf" ] && echo -en "$buf"
+  }
+  [ "$4" ] || return 1  # nothing to run
+  shift 3
+  _rout < <("$@" 2>&1); wait "$!"; r="$?"
+  if [ "$o" != '-' ] && ((r)); then
+    [ "${t,,}" = "borg" ] && ((r>1 && r<100)) && m=ERROR # Borg special: raise level for 2..99
+    msg "$t returned status $r" "$m"
+  fi
+  return "$r"
+}
+# Gen. Wrapper to run cmd in own shell: "-|log" "title" "cmd" "args"+
+run_custcmd (){ [ "$3" ] || return 0
+  if ((!cfALLOW_CUSTHOOKS)) then [ "$1" = '-' ] || warn "Custom commands got disallowed"; return 1; fi
+  run "$1" WARN "$2" bash -O gnu_errfmt -c "$3 \"\$@\"" "Hook" "${@:4}"
+}
+# Run a snapper cmd wrapped: "-|log" "cfg name" "snapper cmd & args"+
+run_snapper (){ dowehave "$cfBIN_SNAPPER" || return 0  # no error at this level, just no result
+  run "$1" ERROR "Snapper" "$cfBIN_SNAPPER" -c "${@:2}"
+}
+# Run a borg cmd wrapped with std env: "-|log" "repo" "pass" "borg cmd & args"+
+run_borg (){ dowehave "$aBORGCMD" || return 0  # no error at this level, just no result
+  local -i r=0
+  declare -x BORG_REPO="$2"
+  declare -x BORG_SELFTEST=disabled                         # should CLEARLY be ok when we are running
+  declare -x BORG_EXIT_CODES=modern                         # so we ca trap e.g. 70..73 for locked repos
+  declare -x BORG_RELOCATED_REPO_ACCESS_IS_OK=yes           # typically a simple replugging, so ok
+  declare -x BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=no  # better no, all our repos should be known
+  declare -x BORG_CHECK_I_KNOW_WHAT_I_AM_DOING=NO           # clearly no, though we should never get this
+  declare -x BORG_DELETE_I_KNOW_WHAT_I_AM_DOING=NO          # dto.
+  [ "${3:0:2}" = "C:" ] && declare -x BORG_PASSCOMMAND="${3:2}" || declare -x BORG_PASSPHRASE="${3:2}"
+  run "$1" WARN "Borg" "$aBORGCMD" "--$cfOUTPUT_BORG" "${@:4}"; r=$?
+  ((r<2 || r>99)) # warnings are ok & already logged by 'run'
+}
+
+# Eval OnCalender expression $2 using opt. base-time/offset $3. Return data parts as specified in $1:
+# no*rm|next|nextl*oc|nl*|l*|nextu*tc|nu*|u*|f*romnow, line no. (0..4), or all lines for others
+  # EXPECTED result lines:
+  # 0: orig. input                   < ign
+  # 1: norm. input                   < REQ in other func
+  # 2: next due loc, relto base-time < REQ here
+  # 3: next due utc, relto base-time < ign
+  # 4: "from now"                    < ign
+oncal_eval (){ local -a ia; local -i i=-1; local buf
+  buf=$("$cfBIN_ONCAL" --base-time="${3:-now}" calendar "$2" 2>/dev/null) || return 1
+  readarray -t ia <<<"$buf"
+  case ${1,,} in 0|1|2|3|4) i=$1;; no*) i=1;; l*|nl*|next|nextl*) i=2;; u*|nu*|nextu*) i=3;; f*) i=4;; esac
+  # just stripping off the lead-ins here, leaving all of the data intact
+  ((i<0)) && for ((i=0; i<5; i++)); do echo "${ia[i]#*: }"; done \
+          || echo "${ia[i]#*: }"
+  :
+}
+
+##############################################################################
+# %Systemd Stuff
+
+# Query systemctl into hash $1 with for unit $2 and type $3 (defaulting to "service"),
+# using our predefined key arys
+sysd_query (){ local -n ra_=$1; local -a ka; local -i r; local k v l buf u="$2" t="$3"
+  { ((!envSYSD)) || ! dowehave systemctl; } && return 1
+  if [ "${t:0:1}" = "t" ];
+  then t="timer";   ka=("${cSCTL_COMKEYS[@]}" "${cSCTL_TMRKEYS[@]}")
+  else t="service"; ka=("${cSCTL_COMKEYS[@]}" "${cSCTL_SVCKEYS[@]}")
+  fi
+  [[ "$u" =~ \.(service|timer)$ ]] && u="${u%.*}"; u+=".$t"
+  ra_=()
+  systemctl is-active "$u" &>/dev/null; r=$?; ra_[_active]=$r; ((r>3))   && return 1
+  buf=$(systemctl show "$u" -p "$(printf '%s,' "${ka[@]}")" 2>/dev/null) || return 1
+  while read -r l; do
+    k=${l%%=*}; [ "$k" ] || continue; v=${l#*=}
+    ra_[$k]="$v"
+  done <<<"$buf"
+  [ "${ra_[LoadState]}" = "loaded" ]
+}
+sysd_get_timer (){ local -n tra_=$1; local -a ua; local u
+  ((envTTY)) && ua=("$2" "$cfSYSTEMD_TIMER_NAME" "$aMYNAME" snapback) \
+             || ua=("$2" "$cfSYSTEMD_TIMER_NAME" "$TRIGGER_UNIT" "$envUNIT" "$aMYNAME" snapback)
+  for u in "${ua[@]}"; do
+    [ "$u" ] && sysd_query tra_ "$u" timer && [ "${tra_[Transient]}" = "no" ] && return 0
+  done
+  return 1
+}
+sysd_get_service (){ local -n sra_=$1; local u
+  [ "$2" ] && sysd_query sra_ "$2" service && return 0 || sra_=()
+  ! sysd_get_timer sra_ "$2" && sra_=() && return 1
+  u="${sra_[Unit]}"
+  [ "$u" ] && sysd_query sra_ "$u" service
+}
+# Get path to timer dropin into varname $1, optionally using unit name $2
+sysd_get_dropin (){ local -A ra; local p="$cfSYSTEMD_TIMER_DROPIN"
+  [ ! "$p" ] && error "No 'timer_dropin' configured" && return 1
+  if [[ "$p" != "/"* ]]; then
+    sysd_get_timer ra "$2" && [ "${ra[FragmentPath]}" ] && p="${ra[FragmentPath]}.d/$p" || p=""
+  fi
+  [ ! -f "$p" ] && error "Could not find timer dropin" && return 1
+  printf -v "$1" '%s' "$p"
+}
+# Update timer dropin, $1 nonempty for standalone command call
+sysd_upd_dropin (){ local -a la; local -i ci; local cs df ds dp l
+  ((!envSYSD)) && error "Timer updates require systemd!" && return 1
+  sysd_get_dropin dp || return 1
+  xvmsg T "Timer dropin: $dp"
+  jobs_get_oncal la
+  for l in "${la[@]}"; do
+    cs+="OnCalendar="; ((cfSYSTEMD_CANONICALIZE)) && cs+="${l#*|}" || cs+="${l%%|*}"; cs+=$'\n'
+  done
+  df=$(< "$dp")
+  [[ "$df" = *"# ---x---"* ]] && ci=1
+  if ((ci)); then
+    ds="${df%# ---x---*}"
+    xvmsg T "🢃 Timer dropin pre marker"  && dump_out "$ds" data
+    [[ "$ds" =~ $'\n'"On"(Calendar|(Active|Boot|Startup|UnitActive|UnitInactive)Sec)=([[:space:]]*)($'\n'|$) ]] || \
+      warn "Timer dropin contains no clearing 'On*=' statement!"
+    ds="${df##*# ---x---+([$'\n\t' ])}"
+    xvmsg T "🢃 Timer dropin post marker" && dump_out "$ds" data
+    [ "$1" ] || ds="${ds//#}" # allows commenting of single entries w/o triggering update unless standalone
+    [ "$cs" != "$ds"$'\n' ] && df="${df%# ---x---*}# ---x---"$'\n' || df=""
+  else
+    xvmsg T "Timer dropin contains no marker line"
+    df="[Timer]
+Persistent=true
+OnCalendar=
+OnCalendar=2063-04-05
+# The following marker line tells snapback to apply own changes only below
+# ---x---
+"
+  fi
+  xvmsg T "🢃 Configured Schedules" && dump_out "$cs" data
+  if [ ! "$df" ]; then
+    [ "$1" ] || xvmsg T "No update required"
+    [ "$1" ] && info "No timer update required"
+    return 0
+  fi
+  ((cfDRYRUN)) && msg "Dryrun disabled timer update" -DRY && return 0
+  df+="$cs"
+  xvmsg T "🢃 Timer dropin update"  && dump_out "$df" data
+  ! echo "$df" >"$dp" 2>/dev/null       && error "Error updating timer dropin" && return 1
+  ! systemctl daemon-reload 2>/dev/null && error "Error daemon-reloading"      && return 1
+  info "Timer dropin updated"
+}
+# Suppress redundant timer triggers, incl. persistent ones
+sysd_calm_timer (){ { local s="/var/lib/systemd/timers/stamp-$TRIGGER_UNIT"
+  ((envSYSD)) && [ "$TRIGGER_UNIT" ] && dowehave systemctl; }              || return 0 # nothing to do
+  # don't calm transient ones, saving the lookup for explicitely configured ones
+  [ "${TRIGGER_UNIT%.timer}" = "${cfSYSTEMD_TIMER_NAME%.timer}" ] || \
+  [[ "$(systemctl show "$TRIGGER_UNIT" -p Transient 2>/dev/null)" = *no ]] || return 0
+  xvmsg T "Calming timer reactivations"
+  [ -f "$s" ] && touch "$s" &>/dev/null # for persistent ones
+  ! systemctl restart "$TRIGGER_UNIT" &>/dev/null && error "Error restarting $TRIGGER_UNIT" && return 1
+}
+
+##############################################################################
+# %Node Stuff
+
+# Get data for node $1 into our cache
+node_get (){ local -i r=0; local l k v
+  # Helper: Get data for base node $1
+  _basenode_get (){ local -i r=0
+    ! node_get "$1" && cfgerr "Invalid base node" && r=1
+    ((!r)) && [ "${gNDC[$1|base]+set}" ] && cfgerr "Bases may not themselves be based!" && r=1
+    ((!r))
+  }
+  [ "${gNDC[$1|path]+set}" ] && return 0   # only read anew if not yet known
+  xvmsg N "Caching $1"
+  ! chk_varclass "$1" limname && cfgerr "Bad node name '$1'" && return 1
+  while read -r l; do k=${l%%=*}; v=${l#*=}
+    [ "$k" ] || continue
+    [ "$k" = "path" ] && [[ "$v" = "file://"* ]] && v="${v#file://}"
+    vfset cVFLT_NODES "$k" v && gNDC[$1|$k]="$v" || r=1
+  done  < <(cfq - nodedata "$1")
+  [ ! "${gNDC[$1|path]}" ] && cfgerr "Node '$1' got no path" && r=1
+  # get base if configured
+  v="${gNDC[$1|base]}"
+  [ "$v" ] && if [ "$v" = "$1" ];
+              then unset "gNDC[$1|base]" # get rid of self-refs
+              else _basenode_get "$v" || r=1
+              fi
+  if ((r)); then unset "gNDC[$1|path]"; cfgerr "Node '$1' not or misconfigured"; return 1; fi
+  node_get_fsdata "$1"
+  if [ "${gNDC[$1|_scfg]}" ];
+  then [ "${gNDC[$1|snappercfg]}" ] && gNDC[$1|_scfg]="${gNDC[$1|snappercfg]}" # override if configured
+  else unset "gNDC[$1|snappercfg]" # get rid of pseudo-overrides
+  fi
+  xvmsg N "🢃 Cached $1" && dump_dmap gNDC "$1"
+  :
+}
+# Get/Upd filesystem related info for cached node $1, options in [$2]:
+#  U: update (clr & refill)
+node_get_fsdata (){ local buf bn="${gNDC[$1|base]}" p="${gNDC[$1|path]}" t; local -a ia
+  local -r fmcols="TARGET,FSTYPE,SOURCE,UUID,OPTIONS,SIZE,AVAIL" keys=(_mnt _fs _dev _uuid _opts _vols _vola)
+  [ "$p" ] || return 1 # nothing we can do
+  xvmsg N "Getting $1 fsdata"
+  if [[ "$2" = *U* ]]; then
+    for t in "${keys[@]}"; do unset "gNDC[$1|$t]"; done
+    [ "$bn" ] && node_get_fsdata "$bn" U
+  fi
+  # the file:// stripping is normally done before but we want to be generic here and not
+  # assume too much about our caller's
+  [[ "$p" = "file://"* ]]  && p=${p#file://}
+  [[ "$p" = "ssh://"* ]]   && gNDC[$1|_mnt]="remote" && return 0
+  [[ "$p" = *":"* ]]       && gNDC[$1|_mnt]="remote" && return 0
+  gNDC[$1|_mnt]="unknown"
+  # start assuming our path is a mountpoint
+  buf=$(findmnt -nvreU -o "$fmcols" -M "$p" 2>/dev/null) && gNDC[$1|_mnt]="mounted"
+  [ ! "$buf" ] && buf=$(findmnt -nvreUs -o "$fmcols" -M "$p" 2>/dev/null) && gNDC[$1|_mnt]="unmounted"
+  if [ ! "$buf" ] && [ ! "$bn" ]; then # try to find base if needed but not configured
+    buf=$(findmnt -nvreU -o "$fmcols" -T "$p" 2>/dev/null) && gNDC[$1|_mnt]="mounted"
+    # check the mount point only when != path, condensed form, with unescaping target result in between!
+    if [ "$buf" ] && printf -v t "${buf%% *}" && [ "$t" != "$p" ]; then
+      # with /-targeted empty dirs we may be pretty sure they're unmounted non-fstabs, i.e. unknown
+      [ "$t" = "/" ] && [ -d "$p" ] && [ ! "$(ls -A "$p")" ] && gNDC[$1|_mnt]="unknown" && return 1
+      # find & register base node
+      t=$(cfq - nodebypath "$t") && [ "$t" ] && node_get "$t" && [ ! "${gNDC[$t|base]+set}" ] && bn="$t"
+    else return 1 # "impossible"
+    fi
+  fi
+  if [ "$bn" ]; then for t in "${keys[@]}"; do [ "${gNDC[$bn|$t]+set}" ] && gNDC[$1|$t]="${gNDC[$bn|$t]}"; done
+  elif [ "$buf" ]; then
+    readarray -td' ' ia <<<"$buf "; unset "ia[-1]" # cannot just 'ia=($1)' here as we may have empty 'fields'
+    gNDC[$1|_fs]="${ia[1]}"; [ "${ia[1]}" = "btrfs" ] && [ "${aSNM[$p]+set}" ] && gNDC[$1|_scfg]=${aSNM[$p]}
+    [[ "${ia[2]}" = "/dev/"* ]] && gNDC[$1|_dev]="${ia[2]/\/dev\/}"
+    [ "${ia[3]}" ] && gNDC[$1|_uuid]="${ia[3]}"
+    gNDC[$1|_opts]="${ia[4]}"; buf=",${ia[4]},"
+    while [ "$buf" ]; do t=${buf%%,*}
+      case $t in    # some opts we pick and register separately
+        subvolid=*) gNDC[$1|_svid]=${t#*=} ;;
+        subvol=*)   gNDC[$1|_svol]=${t#*/} ;;
+      esac
+      buf=${buf#*,}
+    done
+    if [ "${gNDC[$1|_mnt]}" = "mounted" ]; then
+      gNDC[$1|_vols]="${ia[5]}"
+      gNDC[$1|_vola]="${ia[6]}"
+    fi
+  fi
+  [ "$bn" ] && gNDC[$1|base]="$bn"
+  :
+}
+# Get borg archives list into smap, in REVERSED time order
+# 1:   result hash name (existing)
+# 2:   repo node name
+# [3]: archive name pattern or (borgv2) series name, defaults to "*"
+# [4]: last n only, defaults to 999 (!)
+node_get_archs (){ local -n ra_=$1; local -a ia; local buf l k v r=0
+  if ((aBORGVN<200));
+  then buf=$(run_borg - "${gNDC[$2|path]}" "$(node_get_pass "$2")" list -a "${3:-*}" --consider-checkpoints --last "${4:-999}" --json) || r=1
+  else buf=$(run_borg - "${gNDC[$2|path]}" "$(node_get_pass "$2")" repo-list -a "${3:-*}" --last "${4:-999}" --json) || r=1
+  fi
+  ((r)) && error "Cannot access borg repo at $2" && return 1
+  readarray -t ia < <("$cfBIN_YQ" -pj -r '.archives | reverse | to_entries | .[] |
+      (.key +"|id="+    .value.id,
+       .key +"|name="+  .value.name,
+       .key +"|time="+  .value.time, "_len="+  .key)' 2>/dev/null <<<"$buf")
+  for l in "${ia[@]}"; do k=${l%%=*}; v=${l#*=}
+    [[ "$k" = *"|time" ]] && v="${v::10} ${v:11:8}"  # renorm timespec
+    ra_[$k]="$v"
+  done
+  if [ "${ra_[_len]}" ]; then l=$((++ra_[_len]))
+    # borgv<200: Mark checkpoint (incomplete) archives. Done here to not spread gathering of infos all over
+    ((aBORGVN<200)) && for (( k=0; k < l; k++ )); do [[ "${ra_[$k|name]}" = *".checkpoint" ]] && ra_[$k|flags]="unfin "; done
+  else ra_[_len]=0
+  fi
+  :
+}
+# Get timestamp of most recent archive at node $2 globbed/filtered $3 into var $1
+node_get_lat (){ local -n lt_=$1; local -A aa; local m t
+  node_get_archs aa "$2" "$3" 1 || return 1
+  ((aa[_len])) && t="${aa[0|time]}" && lt_=$(tsdate "$t") || lt_=0
+  if inopts A; then
+    ((lt_)) && m="$t" || m="(no match)"
+    msg "Last archived: $m" ---A
+  fi
+}
+# Get mangled repo_pass* for node $1
+# NOT done right in node_get() to avoid confusing "show node" output and quirking the "[hidden]" stuff
+node_get_pass (){ local p
+  [ "${gNDC[$1|repo_passcommand]}" ] && p="C:${gNDC[$1|repo_passcommand]}"
+  [ "${gNDC[$1|repo_passphrase]}" ]  && p="P:${gNDC[$1|repo_passphrase]}"
+  echo "${p:-P:}"
+}
+# Get snapper snapshots list into smap, in REVERSED time order
+# 1:   result hash name (existing)
+# 2:   node name (MUST be a snapped node)
+# 3:   snaptag (or pattern, "*" or ".*" for any)
+# [4]: last n only, defaults to 999
+node_get_snaps (){ local -n ra_=$1; local -a ia; local sn st l k v
+  local -r c="description,date,number,read-only,default,active,user,cleanup"
+  # Get btrfs default as snapshot number (defensively)
+  # 1: path (to filter non-/)
+  _snaps_getdefnum (){ local t
+    [ "$1" = "/" ] && dowehave btrfs && t=$(btrfs su get-def / 2>/dev/null)
+    t=${t%/*}; t=${t##*/}  # we always get "<mnt>/<num>/snapshot" at the (path) end
+    [ ! "${t//[0-9]}" ] && echo "$t"
+  }
+  sn="${gNDC[$2|_scfg]}"
+  case $3 in
+    re:*) st="${3:3}";;
+       *) st="${3//\*/.\*}"; st="${st//\?/.}"; st="^$st\$";;
+  esac
+  readarray -t ia < <(run_snapper - "$sn" --jsonout list -t single --disable-used-space --columns "$c" | \
+    "$cfBIN_YQ" -pj -r " .$sn | map(select((.cleanup|test(\"$st\")) and .number!=0)) | reverse | .[0:${4:-999}] | to_entries | .[] |
+      (.key +\"|num=\"+     .value.number,
+       .key +\"|time=\"+    .value.date,
+       .key +\"|comm=\"+    .value.description,
+       .key +\"|ro=\"+      .value.read-only,
+       .key +\"|default=\"+ .value.default,
+       .key +\"|active=\"+  .value.active,
+       .key +\"|user=\"+    .value.user,
+       .key +\"|tag=\"+     .value.cleanup, \"_len=\"+  .key)" 2>/dev/null)
+  for l in "${ia[@]}"; do k=${l%%=*}; v=${l#*=}
+    case $k in *"|num")                v=${v//[!0-9]};;  # in case snapper added 'comfy' extra chars
+               *"|user")               [ "$v" = "root"  ] && continue;;
+               *"|ro")                 [ "$v" = "false" ] && continue;;
+               *"|default"|*"|active") [ "$v" = "false" ] || _ra[${k%|*}|flags]+="${k#*|} "
+                                       continue;;
+    esac
+    ra_[$k]="$v"
+  done
+  if [ "${ra_[_len]}" ]; then l=$((++ra_[_len]))
+    # Merge in default acc. to btrfs-progs, as snapper may not have given it!
+    # Done here to not spread gathering of infos all over
+    if [ "${gNDC[$2|path]}" = "/" ] && v=$(_snaps_getdefnum /) && [ "$v" ]; then
+      for (( k=0; k < l; k++ )); do
+        if [ "${ra_[$k|num]}" = "$v" ]; then [[ ${ra_[$k|flags]} != *default* ]] && ra_[$k|flags]+="default "; break; fi
+      done
+    fi
+  else ra_[_len]=0
+  fi
+  :
+}
+# Get a single snapshot attrib
+# 1:   node name (MUST be a snapped node)
+# 2:   snapshot num
+# 3:   snapper attrib name
+node_get_snapattr (){ local -a ia; local sn="${gNDC[$1|_scfg]}"
+  readarray -t ia < <(run_snapper - "$sn" --jsonout list -t single --disable-used-space --columns "number,$3" | \
+    "$cfBIN_YQ" -pj -r " .$sn | map(select(.number==\"$2\")) | .[] | .$3" 2>/dev/null)
+  [ "${ia[0]+set}" ] && echo "${ia[0]}"
+}
+# Get the path for node $1 within snapshot num $2
+node_get_snappath (){ local p="${gNDC[$1|path]%/}" b="${gNDC[$1|base]}" mp t
+  mp="$p"
+  [ "$b" ] && mp="${gNDC[$b|path]%/}" && t="${p#"$mp"}"
+  mp+="/.snapshots/$2/snapshot$t"
+  echo "$mp" && [ -d "$mp" ] # fail if no dir
+}
+node_get_snaptag  (){ node_get_snapattr "$1" "$2" cleanup; } # Get snapshot tag for node $1 and num $2
+node_get_snaptime (){ node_get_snapattr "$1" "$2" date; }    # Get snapshot time for node $1 and num $2
+# Lock/unlock a snapshot
+# 1:   SET|CLR
+# 2:   node name (MUST be a snapped node)
+# 3:   snapshot num
+# [4]: curr. tag (if known, spares the nasty lookup)
+node_snaplock (){ local -i f=0; local t="$4"
+  [ "$cfSNAPSHOT_LOCK_PREFIX" ] || return 0  # noerr abort if prefix got cleared
+  [ ! "$t" ] && ! t=$(node_get_snaptag "$2" "$3") && return 1
+  if [[ "$t" = "$cfSNAPSHOT_LOCK_PREFIX"* ]]; then [[ "${1^^}" = C* ]] && t="${t:${#cfSNAPSHOT_LOCK_PREFIX}}" && f=1
+                                              else [[ "${1^^}" = S* ]] && t="$cfSNAPSHOT_LOCK_PREFIX$t" && f=1
+  fi
+  ((!f)) || run_snapper log "${gNDC[$2|_scfg]}" modify -c "$t" "$3"
+}
+# Clear all snapshot locks for node $1 (MUST be a snapped node)
+# Suppress info ouput if $2 is set (for extra cleanup in exit trap)
+node_snaplocks_clr (){ local -A sa; local -i i r=0
+  [ "$cfSNAPSHOT_LOCK_PREFIX" ] || return 0  # noerr abort if prefix got cleared
+  node_get_snaps sa "$1" "${cfSNAPSHOT_LOCK_PREFIX}.*" 25
+  if ((sa[_len])); then [ ! "$2" ] && info "⮡ Unlocking ${sa[_len]} $1 snapshot(s)"
+    for ((i=0; i<sa[_len]; i++)); do node_snaplock CLR "$1" "${sa[$i|num]}" "${sa[$i|tag]}" || r=1; done
+  fi
+  ((!r)) && xSNAPLOCKS["$1"]=0
+}
+# Automount node $1
+node_amnt (){ local -i a=$((gNDC[$1|automount])) r=0; local bn="${gNDC[$1|base]}" mn="$1" p pf
+  [ "$bn" ] && a=$((a && gNDC[$bn|automount])) && mn="$bn"
+  p="${gNDC[$mn|path]}"
+  pf="${mn}.amnt"
+  ! set_lock "$pf" && error "Could not lock $pf" && return 1
+  node_get_fsdata "$1" U # may have changed
+  case ${gNDC[$1|_mnt]} in
+         unmounted) if ((a)); then xvmsg N "Node '$1': automounting $p"
+                      # register for unmounting BEFOREHAND to avoid interruption troubles
+                      # using an ipc regfile to be coprocable
+                      echo "$p" >"$xIPCDIR/$pf"
+                      mount "$p" &>/dev/null && node_get_fsdata "$1" U && [ "${gNDC[$1|_mnt]}" = "mounted" ] || \
+                        { r=1; rm -f "$xIPCDIR/$pf" 2>/dev/null; }
+                    else r=1; fi;;
+           unknown) r=1;;
+  esac
+  if ((r)); then
+    ((a)) && error "Mnt ERR: Failed mounting $p, mt='${gNDC[$1|_mnt]}'" \
+          || error "Sys ERR: $p not mounted and automounting disabled"
+  fi
+  clr_lock "$pf"
+  ((!r))
+}
+# Conditionally bind mount archiving path for node $1 dep. on mountdir, prefix-enabled
+# 1:node, 2:snapshot num (0-alike for classic path), 3:varname for cd_to dir, 4:prefix spec
+node_bmnt (){ local mp="$cfMOUNTDIR/$1" np="${gNDC[$1|path]}" sp t; local -i c i n r=1
+  [ "$3" ] && local -n cdto_="$3" || local cdto_ # dummy target var for cd result if not given
+  sp="$np"
+  if (($2)) 2>/dev/null;  then sp=$(node_get_snappath "$1" "$2") || return 1; fi # bad snapshot num
+  if [ ! "$cfMOUNTDIR" ]; then cdto_="$sp"; xvmsg A "⮡ from $cdto_, mnt=(src)"
+    return 0
+  fi
+  cdto_="$mp"
+  case $4 in p*) mp+="/$np"; t="${4#*:}"          # path prefix
+                 if [ ! "$t" = "$4" ]; then [[ "$t" =~ [^0-9] ]] && return 1     # bad skip value
+                   n=$((10#$t)); t="${np%/}"; t="${t//[!\/]}"; c=${#t} # remove trailing slash from np!
+                 fi ;;
+          /*|*/) t="/$4/"; t="${t//\/.?(.)\//\/}" # custom prefix
+                 mp+="$t";;
+          ""|n*) ;;                               # no prefix
+              *) return 1 ;;                      # bad prefix
+  esac
+  mp="${mp//+(\/)/\/}"; mp="${mp%/}" # clean after combining & before skipping!
+  if ((c)); then cdto_="$mp"; for ((i=c-n; i>0; i--)); do cdto_="${cdto_%/*}"; done; fi
+  t="${mp#"$cdto_"}"; [ "$t" ] && t="${t:1}/" ||t="(none)"
+  xvmsg A "⮡ .=$cdto_, mnt=$mp, src=$sp"
+  info "Using prefix: $t"
+  mkdir -p "$mp" &>/dev/null && mount -o bind,ro "$sp" "$mp" &>/dev/null \
+    && r=0 || node_bmnts_clr "$1" # blindly try to clear right away for a clean result
+  ((!r))
+}
+node_bmnts_clr (){ local -a ia ma; local -i i rl=$cUMOUNT_MAXLOOPS; local nd="$cfMOUNTDIR/$1" p
+  _rm_bmdirs (){ local p="$1"; local -i r=0 # NO recursive rm but stepwise rmdir!
+    until [ "$p" = "$cfMOUNTDIR" ] || [ "$p" = "${p/\/}" ]; do
+      ! rmdir "$p" &>/dev/null && r=1 && break; p="${p%/*}"
+    done; ((!r))
+  }
+  while [ "$cfMOUNTDIR" ] && [ -d "$nd" ] && ((rl)); do
+    p=$(get_mnttarget "$nd*") || { _rm_bmdirs "$nd"; break; }
+    umount "$p" &>/dev/null && _rm_bmdirs "$nd" || snore 1
+    ((rl--))
+  done
+  [ "$cfMOUNTDIR" ] && [ -d "$nd" ] && return 1 || :
+}
+
+##############################################################################
+# %Job Stuff
+
+# Pre-check & get job data for $2 into hash $1
+job_get (){ local -n ja_=$1; local -i fbv fcr fpr fto r=0; local jn l k v aBORGVN="$aBORGVN"
+  job_splitspec "$1" "$2"; jn="${ja_[_jn]}"
+  ! declare -F "jc_${ja_[_jc]}" >/dev/null && cfgerr "No handler for job class"         && return 1
+
+  # 1. Defaults & Checks
+  ! node_get "$jn"                         && cfgerr "Bad job node"                     && return 1
+  case ${ja_[_jc]} in
+    compact)  ! dowehave "$aBORGCMD"       && error  "Missing: Compact jobs need borg!" && return 1
+              fbv=1;;
+    archive)  ! dowehave "$aBORGCMD"       && error  "Missing: Archive jobs need borg!" && return 1
+              ja_[task_order]="${cfARCHIVE_DF_TASK_ORDER:-$cDF_TASK_ORDER}"
+              ja_[name_glob]="${cfARCHIVE_DF_NAME_GLOB:-$cDF_NAME_GLOB}"
+              ja_[name_ident]="${cfARCHIVE_DF_NAME_IDENT:-$cDF_NAME_IDENT}"
+              ja_[name]="${cfARCHIVE_DF_NAME-"$cDF_NAME"}"
+              ja_[create_time_fmt]="${cfARCHIVE_DF_TIME_FMT:-$cDF_TIME_FMT}"
+              ja_[create_compression]="${cfARCHIVE_DF_COMPRESSION}"
+              ja_[create_prefix]="${cfARCHIVE_DF_PREFIX}"
+              ja_[create_snap_snaptag]="${cfARCHIVE_DF_SNAPTAG-archive}"
+              ja_[create_snap_useown]=1
+              ja_[prune_method]="${cfARCHIVE_DF_PRUNE_METHOD:-borg}"
+              [ "${gNDC[$jn|_scfg]}" ] && ja_[_sn_arch]=1 # always snap arch snapped nodes!
+              ((!ja_[_sn_arch])) && v="${gNDC[$jn|base]}" && [ "$v" ] && [ "${gNDC[$v|_scfg]}" ] && ja_[_sn_arch]=1
+              fbv=1; fcr=1; fpr=1; fto=1;;
+    snapshot) ! dowehave "$cfBIN_SNAPPER"  && error  "Missing: Snapshot jobs need snapper!"     && return 1
+              #! dowehave btrfs             && error  "Missing: Snapshot jobs need the btrfs binary!" && return 1
+              [ ! "${gNDC[$jn|_scfg]}" ]   && error  "Sys ERR: $jn is not a snapper subvolume!" && return 1
+              ja_[task_order]="${cfSNAPSHOT_DF_TASK_ORDER:-$cDF_TASK_ORDER}"
+              ja_[snaptag]="$cfSNAPSHOT_DF_SNAPTAG"
+              ja_[prune_method]="${cfSNAPSHOT_DF_PRUNE_METHOD:-snapper}"
+              fcr=1; fpr=1;;
+  esac
+  ((cfNOCREATE)) && fcr=0; ((cfNOPRUNE)) && fpr=0
+
+  # 2. Read current job data
+  while read -r l; do k=${l%%=*}
+    [ "$k" ]                                                     || continue
+    [[ "$k" = _* ]]                                              && continue # no overwriting of internals!
+    if [[ "$k" = "create"* ]]; then ((fcr)) && ja_[_do_create]=1 || continue ; fi
+    if [[ "$k" = "prune"*  ]]; then ((fpr)) && ja_[_do_prune]=1  || continue ; fi
+    ja_[$k]="${l#*=}"
+    vfset cVFLT_JOBS "$k" "ja_[$k]" || r=1
+  done  < <(cfq - jobdata "$jn" "${ja_[_jc]}" "${ja_[_ji]}")
+  vdate k "$cfSTATEDIR/jlast/$2" FE && ja_[_tlast]="$k"
+
+  # 3. Post-Checks & some cleaning, incl. "empty task workaround"
+  if [ "${ja_[create]}" ] || ((ja_[create_disabled])); then unset "ja_[_do_create]" ; fi; unset "ja_[create]"
+  if [ "${ja_[prune]}" ]  || ((ja_[prune_disabled]));  then unset "ja_[_do_prune]"  ; fi; unset "ja_[prune]"
+  unset "ja_[disabled]"   # remnant from opt. job disabling, so clear it
+  for k in "${!ja_[@]}"; do
+    [ ! "${ja_[$k]}" ]                              && unset "ja_[$k]" && continue
+    case $k in create_snap_*) ! ((ja_[_sn_arch]))   && unset "ja_[$k]" && continue ;;&
+               create*)       ! ((ja_[_do_create])) && unset "ja_[$k]" && continue ;;
+               prune*)        ! ((ja_[_do_prune]))  && unset "ja_[$k]" && continue ;;
+    esac
+  done
+  if ((fbv)); then # borg version needed
+    if ((fto));
+      then v="${ja_[repo]}"
+        { [ ! "$v" ] || ! node_get "$v"; }          && cfgerr "Bad or missing repo node '$v'"          && r=1
+      else v="$jn"; unset "ja_[repo]"
+    fi
+    k="${gNDC[$v|repo_version]}"; [ "$k" ] && ja_[_bvm]="$k"
+    if sel_borg v "$k"; then ((v)) && xvmsg C "Using ${aBORGS[$v|cf]}, v${aBORGS[$v|vs]}"
+      ja_[_bid]="$v"; aBORGVN="${aBORGS[$v|vn]}" # JUST changing aBORGVN here to get variants straight, NOT the cmd!
+    else                                               cfgerr "Got no borg for repo (version: '$k')"   && r=1
+    fi
+    ((aBORGVN<200)) && unset "ja_[name]"
+  fi
+  if [ "${ja_[_jc]}" = "archive" ]; then
+    [ "${ja_[name]}" ] && k=2 || k=1
+    xvmsg J "Using v$k archive naming"
+    if ((k==1)); then [ ! "${ja_[name_glob]}" ]     && cfgerr "Archive name glob needed for v1 naming" && r=1
+                 else unset "ja_[name_glob]"; unset "ja_[name_ident]"; unset "ja_[create_name_ident]"
+    fi
+  fi
+  if ((ja_[_do_create])); then
+    case ${ja_[_jc]} in
+      archive)  if ((k==1)); then
+                  l="${ja_[create_name_ident]}"; [ ! "$l" ] && l="${ja_[name_ident]}" # "inherit" if not specified
+                  [ ! "$l" ]                             && cfgerr "Archive name ident needed for v1 naming"            && r=1
+                  v="${ja_[name_glob]/"*"/$l}"; v="${v//"*"}"; v="${v//"?"/_}"
+                  ja_[_ac_name]="$v" # combined final name, remaining '*' deleted, '?' replaced
+                  if ((aBORGVN>=200)); then
+                    v="${ja_[name_glob]//*([.:_~=+-])"*"*([.:_~=+-])}"; v="${v//"?"/_}"
+                    ja_[_ac_suff]="$v"  # reduced glob for use as v2 cache suffix
+                  fi
+                else ja_[_ac_name]="${ja_[name]}"
+                fi
+                ((ja_[create_snap_useown])) && ! chk_varclass "${ja_[create_snap_snaptag]}" safetag \
+                                                         && cfgerr "Plain snaptag needed for own archiving snapshots!"  && r=1
+                ;;
+      snapshot) ! chk_varclass "${ja_[snaptag]}" safetag && cfgerr "Plain snaptag needed for snapshot creation!"        && r=1
+                [ "${ja_[snaptag]}" = "empty-pre-post" ] && cfgerr "Cannot create pre/post snapshots, only prune them!" && r=1
+                ;;
+    esac
+  fi
+  if ((ja_[_do_prune])); then l="${ja_[prune_method]}"
+    case ${ja_[_jc]} in
+      archive)  ((k==1)) && ja_[_ap_filt]="${ja_[name_glob]}" || ja_[_ap_filt]="${ja_[name]}"
+                if [ "$l" = "borg" ]; then
+                  [ "${ja_[prune_keep_quarterly]}" ] && ((aBORGVN<141)) \
+                                                    && cfgerr "Borg v1.4.1+ needed for 'quarterly' with method 'borg'!" && r=1
+                else
+                  prune_methfix l && ja_[prune_method]="$l" || r=1
+                fi
+               ;;
+      snapshot) v="${ja_[snaptag]}"
+                if [ "$l" = "snapper" ]; then
+                  [[ " timeline number empty-pre-post " != *" $v "* ]] \
+                                                    && cfgerr "Cannot prune '$v' tags with method 'snapper'!"           && r=1
+                else
+                  [ "empty-pre-post" = "$v" ]       && cfgerr "Pruning pre/post snapshots needs method 'snapper'!"      && r=1
+                  prune_methfix l && ja_[prune_method]="$l" || r=1
+                fi
+                ;;
+    esac
+  fi
+  ((r)) && return 1
+  xvmsg J "🢃 Job Data" && dump_dmap ja_
+  :
+}
+# Check if there is indeed a validly scheduled job configured for jobspec $1
+# [$2]: schedule spec to check against
+job_hassched (){ local -a ia; local s="*" t
+  [ "$2" ] && [[ ! "$2" =~ ^[.xX].*|manual$ ]] && s="$2"
+  readarray -td. ia <<<"$1."; unset "ia[-1]"
+  t=$(cfq - jobhassched "*" "$s" "${ia[@]}") && [ "$t" ]
+}
+# Split a jobname $2 into existing [_jn,_jc,_ji]-hash $1
+job_splitspec (){ local -n ra_=$1; local -a ia
+  readarray -td. ia <<<"$2."; unset "ia[-1]"
+  ra_[_jn]="${ia[0]}"; ra_[_jc]="${ia[1]}"; ra_[_ji]="${ia[2]}"
+  [ "${#ia[@]}" = "3" ]
+}
+# Get sorted "orig|norm" list of unique current valid schedules (any qname) into ary $1
+jobs_get_oncal (){
+  _oncal_norm (){ local l s v
+    while read -r l; do s=${l##*|}
+      v=$(oncal_eval norm "$s") || continue
+      echo "$s|$v"
+     done
+  }
+  dowehave "$cfBIN_ONCAL" || return  # no scheduling, no oncals
+  readarray -t "$1" < <(cfq - jobschlist "*" "$cYP_JCFLT" | _oncal_norm | sort -ut'|' -k2,2)
+}
+
+##############################################################################
+# %Queueing, QLists & Queue Processing
+
+# Add "next due" times and indicators to "jobname|qname|schedval" piped input,
+# using time range ($1, $2] (epochal) and qopts $3
+# Minimizes analyzer calls for repeated equal specs
+qla_add_ind (){ local l ss lss ft lt t; local -i tlast=$1 tcurr="${2:-$EPOCHSECONDS}" tnxt
+  while read -r l; do [ ! "$l" ] && continue
+    ss=${l##*|}
+    case $ss in
+      manual|.*|x*|X*)  t="$ss|2942978400|M"      ;; # set to First Contact Day (0h in Bozeman, MDT) to sort to the end of all lists
+      disabled)         t="DISABLED|2943064800|-" ;; # these we may get in extended schedules, when valid ones exist for other elems
+                                                     # just mark and set date to the day AFTER First Contact
+      *)  if ! dowehave "$cfBIN_ONCAL"; then t="$ss|2942978401|M" # mark as M & sort just behind "normal" Ms
+          else  ((cfQUEUE_NOPERJOB)) && ft=0 || vdate ft "$cfSTATEDIR/jlast/${l%%|*}" FE
+                ((ft > tlast)) && lt="$ft" || lt="$tlast" # chg base time when job was run after last sched
+                if [ "$lss" != "$ss" ] || ((lt != tlast)); then
+                  if ! t=$(oncal_eval nextloc "$ss" "@$lt"); then t="INVALID|0|E"
+                  else t=${t:4} # strip DOW part but NOT YET the TZ to avoid getting the wrong epoch during DST "extra hours"
+                       vdate tnxt "$t" E; t="${t:0:19}|$tnxt|"
+                       ((tnxt <= tcurr)) && t+="D" || t+="N"
+                  fi
+                fi
+          fi ;;
+    esac
+    ((lt != tlast)) && lss="" || lss="$ss"          # force eval when base time was changed
+    if [ "$3" = "*" ] || [[ "$3" = *"${t: -1}"* ]]; then echo "$l|$t"; fi
+  done
+}
+# Collate jobs given by JSPECs in $3+ into ary $1, using epochal due time $2
+qla_collate (){ local -n ra_=$1; local -i dt="${2:-0}"
+  shift 2
+  _jca (){ local e jn="${1%%|*}"
+    for e in "${ra_[@]}"; do [ "${e%%|*}" = "$jn" ] && return 0; done
+    ra_+=("$jn|*|*|selected|$dt|D") # && xvmsg L "List added '$jn'"
+  }
+  # Collating recursor - $1: curr. element, $2: elem. chain, $3: disallowed prefixes
+  _jcc (){ local -i fin; local buf ch="$2" dis l qa qb qq
+    [ "$1" ] || return 0
+    [[ "$3" = *"${1:0:1}"* ]] && error "Prohibited for good reason: '$1' in '$ch'!" && return 1
+    [[ "$2" ]] && ch+=" •"; ch+="$1"
+    case ${1:0:1} in
+      .) qq=jobsbyattr; qa="${1:1}"; qb="${qa##*=}"; qa="${qa%%=*}"; fin=1
+         if [ ! "$qa" ] || [[ "$qa" =~ [*?] ]]; then error "Bad job attribute key '$qa' in '$ch'"; return 1; fi
+         ;;
+      :) qq=listdata; qa="${1:1}"; dis=":%";;
+      %) qq=""; dis="%"
+         ! qa=$(chk_suppfile "${1:1}") && error "File not found or bad: $qa" && return 1
+         ;;
+      @) qq=""; qa="$cfSTATEDIR/$1"; [ -f "$qa" ] || qa="/dev/null";;
+      *) qq=jobsbyname; qa="$1"; fin=1;;
+    esac
+    if [ "$qq" ];
+    then buf=$(cfq - "$qq" "$qa" "$qb" "$cYP_JCFLT" "*") || exit_err "OOPS in _jcc query: $buf"
+    else buf=$(<"$qa")
+    fi
+    xvmsg L "🢃 List query '$ch'" && dump_out "$buf" data
+    while read -r l; do
+      [ "$l" ]             || continue
+      [ "${l:0:1}" = "#" ] && continue
+      if ((fin)); then _jca "$l"; else _jcc "${l%%|*}" "$ch" "$dis" || return 1; fi
+    done <<<"$buf"
+  }
+  while (($#)); do
+    _jcc "$1" || return 1
+    shift
+  done
+  xvmsg L "🢃 List Result" && dump_ary ra_ data
+  :
+}
+# Remove jobname $2 from ary $1
+qla_del_job (){ local -n rja_=$1; local -i i n=${#rja_[@]}
+  for ((i=0; i<n; i++)); do
+    [[ "${rja_[$i]}" = "$2|"* ]] && unset "rja_[$i]" && rja_=("${rja_[@]}") && return 0
+  done; return 1
+}
+# Get scheduled jobs (sorted) into job ary $1 for due time range ($2, $3] (epochal) with options $4
+qla_get_sched (){ local -n ra_=$1; local o
+  [ "$4" = "*" ] && o="$4" || o="D$4" # make sure D is always included
+  readarray -t ra_ < <(cfq - jobschlist "$aJQN" "$cYP_JCFLT" | \
+    qla_add_ind "$2" "$3" "$o" | \
+    sort -nst'|' -k5,5)
+}
+# Merge arys $2+ into $1
+qla_merge (){ local -n ra_=$1; local -a ia; local a
+  # shellcheck disable=SC2068
+  for a in ${@:2}; do local -n ia_="$a"; ia+=("${ia_[@]}"); done # re-splitting from $2 here to allow strings as well!
+  readarray -t ra_ < <(printf '%s\n' "${ia[@]}" |
+    sort -nst'|' -k5,5 | nl -s'|' | sort -ust'|' -k2,2 | sort -n | cut -d'|' -f2-)
+}
+
+# Get $2 qname file contents into ary $1, removing stale jobs along unless $3==N*(ofix)
+qlf_get (){ local -n ra_=$1; local -a ea; local -i f i n; local fn="$cfSTATEDIR/@$2"
+  [ ! -f "$fn" ] && ra_=() && return 1 || readarray -t ra_ <"$fn"
+  [ ! "${ra_[0]}" ] && unset "ra_[0]" && ra_=("${ra_[@]}")
+  n=${#ra_[@]}
+  # fixup stales unless suppressed
+  if [[ "${3^^}" = N* ]]; then ((n)); return; fi
+  for ((i=0; i<n; i++)); do readarray -td\| ea <<<"${ra_[$i]}|"
+    ! job_hassched "${ea[0]}" "${ea[2]}" && f=1 && msg "Removing '${ea[0]}' from @$2: schedule changed or gone" WARN && unset "ra_[$i]"
+  done
+  ((f)) && ra_=("${ra_[@]}") && ((!cfDRYRUN)) && qlf_upd "$2" ra_
+  ((${#ra_[@]}))
+}
+# Update $1 qname file with job ary $2, empty for $2=="", touch only for '-',
+# optionally setting scheduled qlist file time to $3
+qlf_upd (){ local -i n to sf=$((aJQIA[$1|schedule])); local ft fn="$cfSTATEDIR/@$1"
+  case $2 in -)to=1 ;& "")local ja_=();; *)local -n ja_=$2;; esac
+  if [ "$3" ]; then ! vdate ft "$3" && error "Bad date/time specifier: '$3'" && return 1; fi
+  if ((sf)); then sf=1; [ ! "$3" ] && [ ! "$ft" ] && vdate ft "$fn" F; fi
+  ((to)) && [ ! "$ft" ] && error "OOPS: no date/time specifier"              && return 1
+  n=${#ja_[@]}
+  if   ((to))       ; then                                                 touch -d "$ft" "$fn" &>/dev/null
+  elif ((sf  &&  n)); then printf '%s\n' "${ja_[@]}" >"$fn" 2>/dev/null && touch -d "$ft" "$fn" &>/dev/null
+  elif ((sf  && !n)); then                         : >"$fn" 2>/dev/null && touch -d "$ft" "$fn" &>/dev/null
+  elif ((!sf &&  n)); then printf '%s\n' "${ja_[@]}" >"$fn" 2>/dev/null
+  else [ ! -f "$fn" ] || rm -f "$fn" &>/dev/null
+  fi
+  (($?)) && error "Error accessing @$1" && return 1
+  xvmsg Q "Updated @$1"
+  :
+}
+
+# Build processing queue gJPQ incl. gJQA, given extra selected jobs in $1+
+jpq_build (){ local -a ja; local -i n st=0
+  [ "$aJQN" ] && info "Queueing into $aJQN" || info "Queueing into (unnamed)"
+  tCURREPO=$EPOCHSECONDS # default
+  # get qlist unless unnamed
+  if [ "$aJQN" ]; then
+    qlf_get gJQA "$aJQN"; n=${#gJQA[@]}
+    if ((n)); then xvmsg Q "🢃 QList: $n job(s) to process" && dump_ary gJQA
+                   ((aJQIA[$aJQN|schedule])) && dowehave "$cfBIN_ONCAL" && info "Got $n backlogged/qlisted job(s)"
+              else xvmsg Q "QList: no jobs"
+    fi
+    else xvmsg Q "QList: n/a"
+  fi
+  # scheduled jobs
+  if [ "$aJQN" ] && ((aJQIA[$aJQN|schedule])) && dowehave "$cfBIN_ONCAL"; then
+    jpq_get_due ja "${cfQUEUE_QOPTS:-DE}"; n=${#ja[@]}
+    if ((n)); then info "Got $n due job(s)"
+                   qla_merge gJQA gJQA ja
+                   xvmsg Q "🢃 Jobs after merging" && dump_ary gJQA
+                   ja=()
+              else xvmsg Q "Scheduled: no jobs"
+    fi
+    else xvmsg Q "Scheduled: n/a"
+         dowehave "$cfBIN_ONCAL" || info "Schedule processing is disabled!"
+  fi
+  # selected jobs
+  if (($#)); then
+    ((cfQUEUE_ADDLAST)) && st=$tCURREPO
+    qla_collate ja "$st" "$@" && n=${#ja[@]} || exit_err "Job selection aborted!"
+    if ((n)); then xvmsg Q "🢃 Selected: $n job(s) to process" && dump_ary ja
+                   info "Got $n selected job(s)"
+                   qla_merge gJQA gJQA ja
+                   xvmsg Q "🢃 Jobs after merging" && dump_ary gJQA
+              else xvmsg Q "Selected: no jobs"
+    fi
+    else xvmsg Q "Selected: n/a"
+  fi
+  # and finalize
+  jpq_fin gJQA
+  if ((!${#gJPQ[@]})); then info "Nothing to do!"
+    ((cfDRYRUN)) || [ ! "$aJQN" ] || qlf_upd "$aJQN" "" "@$tCURREPO" # clear & touch qlist file
+    return 1
+  fi
+  :
+}
+# Finalize $1 into processing queue gJPQ
+jpq_fin (){ local -n jfqa_=$1; local -a ia jf jl; local -i i n; local t
+  gJPQ=()
+  n=${#jfqa_[@]}
+  for ((i=0; i<$n; i++)) do
+    readarray -td\| ia <<<"${jfqa_[$i]}|"; t="${ia[0]}"
+    case ${ia[5]} in
+      D)  if   ((cfQUEUE_SNAPFIRST )) && [[ "$t" = *".snapshot."* ]]; then jf+=("$t")
+          elif ((cfQUEUE_COMPLAST))   && [[ "$t" = *".compact."*  ]]; then jl+=("$t")
+          else gJPQ+=("$t")
+          fi
+      ;;
+      # All non-D we also remove from the due jobs ary!
+      E)  unset "jfqa_[i]"; error "Job ERR: ignoring '$t', bad schedule entry '${ia[2]}'" ;;
+      *)  unset "jfqa_[i]"; info  "Not due: ignoring '$t'" ;;
+    esac
+  done
+  jfqa_=("${jfqa_[@]}") # compact
+  n=${#jf[@]} && ((n)) && gJPQ=("${jf[@]}" "${gJPQ[@]}") && ((n < ${#gJPQ[@]} + ${#jl[@]})) && info "$n snapshot(s) promoted"
+  n=${#jl[@]} && ((n)) && gJPQ+=("${jl[@]}")             && ((n < ${#gJPQ[@]}))             && info "$n compact(s) demoted"
+  xvmsg Q "🢃 Queue after fixup" && dump_ary gJPQ
+  n=${#gJPQ[@]}; ((n)) && info "$n job(s) queued"
+  # $? is ((n))
+}
+# Get aJQN due jobs into $1, using qopts $2
+# Note D is always made sure of at qla_get_sched!
+jpq_get_due (){  local -n jgda_=$1
+  ! dowehave "$cfBIN_ONCAL" && jgda_=() && info "Schedule processing is disabled" && return 1
+  tCURREPO=$((EPOCHSECONDS + cfQUEUE_LASECS)) # slightly extend the interval into the future to cope with
+                                              # getting due only w/in a few seconds, avoiding some probs.
+  if ! vdate tLASTISO "$cfSTATEDIR/@$aJQN" F; then
+    warn "No prior state for @aJQN, initializing to '$cfDF_RESET_TIME'"
+    ((cfDRYRUN)) || qlf_upd "$aJQN" "" "$cfDF_RESET_TIME"
+    vdate tLASTISO "$cfDF_RESET_TIME"
+  fi
+  vdate tLASTEPO "$tLASTISO" E; vdate tCURRISO "@$tCURREPO"
+  info "Getting jobs due within ($tLASTISO, $tCURRISO]"
+  xvmsg Q "Processing schedules: $2 $aJQN"
+  qla_get_sched jgda_ "$tLASTEPO" "$tCURREPO" "$2"
+  if ((${#jgda_[@]})); then xvmsg Q "🢃 Jobs per schedule" && dump_ary jgda_
+                       else return 1
+  fi
+  :
+}
+# Rescan dues into gJPQ, not rebuilding gJQA
+jpq_rescan (){ local -a ja; local -i n
+  info "Rescanning for newly due jobs"
+  gJPQ=() # to be sure, though it should have been cleared before
+  jpq_get_due ja "${cfQUEUE_QOPTS:-DE}"; n=${#ja[@]}
+  if ((n)); then info "Got $n jobs from schedule"
+                 jpq_fin ja               # finalize only the new ones
+                 qla_merge gJQA gJQA ja  # merge after fin!
+                 xvmsg Q "🢃 QList after merging" && dump_ary gJQA
+            else info "No further jobs to process"
+  fi
+  ((${#gJPQ[@]}))
+}
+
+# Process the current queue
+jqp (){
+  _jqpu    (){ ((!cfDRYRUN)) && [ "$aJQN" ] || return 0
+    ((cfQUEUE_NOBACKLOG)) && local qa="" || local qa=gJQA
+    qlf_upd "$aJQN" "$qa" "@$tCURREPO"
+  }
+  # Check out completed job from gJQA and all relevant qlist files
+  _jqp_jok (){ local -a ja; local fn qn
+    [ "$aJQN" ] && xvmsg Q "Clearing from @$aJQN"
+    qla_del_job gJQA "$1" && _jqpu # our curr qlist file
+    ((cfDRYRUN)) || touch -d "@$tCURREPO" "$cfSTATEDIR/jlast/$1" &>/dev/null
+    for fn in "$cfSTATEDIR"/@*; do qn="${fn##*/}"; qn="${qn:1}"
+      [ "$qn" = "$aJQN" ]                            && continue
+      [ -f "$fn" ]                                   || continue
+      ((!aJQIA[$qn|schedule] && !cfQUEUE_CLEANALL))  && continue
+      xvmsg Q "Clearing from @$qn"
+      ((cfDRYRUN))                                   && continue
+      qlf_get ja "$qn" NOFIX && qla_del_job ja "$1" && qlf_upd "$qn" ja
+    done
+    :
+  }
+  _jqpl    (){ local -A jd; local -i s; local je js jt aMSGPRE="$aMSGPRE" aBORGVN="$aBORGVN" aBORGCMD="$aBORGCMD"
+    _jqpu
+    for js in "${gJPQ[@]}"; do jd=(); s=0
+      ((!envTTY && !cfDRYRUN)) && chk_snooze
+      aMSGPRE="$js"
+      info "• Started"
+      timer_start JOB
+      ! job_get jd "$js"                                         && error "Skipped: Bad job cfg"                && continue
+    # ---- start par section
+      # all our jobs got optional pre- and post commands with identical logic, so we do them right here
+      # and only leave lower level pre/posts for them
+      declare -x SNAPBACK_NODE="${jd[_jn]}"
+      declare -x SNAPBACK_NODE_PATH="${gNDC[${jd[_jn]}|path]}"
+      declare -x SNAPBACK_JOB="${js}.pre"
+      declare -x SNAPBACK_JOB_STATUS=0
+      if [ "${jd[repo]}" ];
+        then declare -x SNAPBACK_REPO="${jd[repo]}"; declare -x SNAPBACK_REPO_PATH="${gNDC[${jd[repo]}|path]}"
+        else unset      SNAPBACK_REPO;               unset      SNAPBACK_REPO_PATH
+      fi
+      if [ "${jd[_bid]}" ];
+        then aBORGVN="${aBORGS[${jd[_bid]}|vn]}";    aBORGCMD="${aBORGS[${jd[_bid]}|cmd]}"
+             declare -x SNAPBACK_BORG_VN="$aBORGVN"; declare -x SNAPBACK_BORG_CMD="$aBORGCMD"
+        else unset      SNAPBACK_BORG_VN;            unset      SNAPBACK_BORG_CMD
+      fi
+      ! run_custcmd log "Pre-Job Cmd" "${jd[pre]}"               && warn  "Aborted: Non-zero pre-job cmd"       && s=2
+      if ((!s)); then
+        ! node_amnt "${jd[_jn]}"                                 && error "Node not mounted"                    && s=1
+        ((!s)) && [ "${jd[repo]}" ] && ! node_amnt "${jd[repo]}" && error "Repo not mounted"                    && s=1
+        if ((!s)); then # now the actual job processing
+          SNAPBACK_JOB="$js"
+          "jc_${jd[_jc]}" jd 2>/dev/null || { s=$?; error "Job failed"; }
+        fi
+        # and finally any post cmd, uncondidionally
+        SNAPBACK_JOB="${js}.post"
+        SNAPBACK_JOB_STATUS=$s
+        run_custcmd log "Post-Job Cmd" "${jd[post]}"
+      fi
+    # ---- end par section
+      ((!s)) && _jqp_jok "$js"
+      timer_time JOB jt && info "• Finished after ${jt}s, status $s"
+    done
+    gJPQ=() # clear right when done so we may use this as an indicator
+  }
+  _jqpl
+  ((!cfQUEUE_NORESCAN && cfDRYRUN)) && cfQUEUE_NORESCAN=1 && msg "Dryrun disabled rescan" -DRY
+  if ((!cfQUEUE_NORESCAN)); then
+    if ((EPOCHSECONDS < tCURREPO)); then xvmsg Q "Rescan trigger time not reached"
+    else while ((EPOCHSECONDS >= tCURREPO)); do
+           jpq_rescan || break
+           _jqpl
+         done
+         _jqpu
+         ((cfSYSTEMD_NOCALM)) || sysd_calm_timer # Suppress redundant triggers
+    fi
+  fi
+  info "Queue done, ${#gJQA[@]} job(s) left uncompleted"
+  if ((${#gJQA[@]})); then
+    ((!cfQUEUE_NOBACKLOG)) && xvmsg Q "🢃 Backlog" && dump_ary gJQA
+    return "$cERR_BACKLOG"
+  fi
+}
+
+##############################################################################
+# %Pruning Method Stuff
+
+# Check & predigest prune.keep cfg
+# 1: result ary name, or '-' to just check
+# 2: job hash name
+prune_getrules (){ local -n kja_=$2; local -i i r=0 s=0; local k v t
+  local -ra nopts=("within|" "last|19" "minutely|16" "hourly|13" "daily|10" "weekly|" "monthly|7" "quarterly|" "yearly|4")
+  [ "$1" = '-' ] && local -a kra_ || local -n kra_=$1
+  for ((i=0; i<${#nopts[@]}; i++)); do v=${nopts[i]}; k=${v%|*}; t=${kja_[prune_keep_$k]}; s=1
+    if [ "$t" ] && [ "$t" != "0" ]; then
+      if [ "$k" = "within" ];
+      then t=$(tsdate_rel "-$t" "$tCURREPO") && s=0 || cfgerr "Bad timespan '${kja_[prune_keep_$k]}' for 'keep.$k'"
+      else [ ! "${t//[0-9]}" ]               && s=0 || cfgerr "Bad value '$t' for 'keep.$k'"
+      fi
+      ((s)) && r=1 || kra_+=("$v|$t")
+    fi
+  done
+  xvmsg P "🢃 Rules digest" && dump_str "${kra_[*]}"
+  ((!r)) && ((!${#kra_[@]})) && cfgerr "Nothing configured to keep" && r=1
+  ((!r))
+}
+# Check & predigest prune.method cfg
+# 1: i/o var name
+#    in:  method specifier
+#    out: "ab|spec", ab = coded result specifier, spec = new textual specifier
+prune_methfix (){ local -n mr_=$1; local t="$mr_"
+  case $t in snapper*) t="first multi";; borg*) t="last single";; esac
+  case $t in *first* | *last*)   [[ "$t" = *first* ]] && mr_="1"  || mr_="0"  ;;&
+             *multi* | *single*) [[ "$t" = *multi* ]] && mr_+="1" || mr_+="0" ;;
+             *) mr_=""
+  esac
+  (( ${#mr_} != 2 )) && cfgerr "Bad pruning method '$t'" && return 1
+  [ "$mr_" = "00" ]  && t="borglike"
+  [ "$mr_" = "11" ]  && t="snapperlike"
+  mr_+="|$t"
+}
+# Flag cands in info hash acc. to rules & assemble the remaining indexess
+# 1: selected results ary name (pruning cand. indexes)
+# 2: candidate hash name
+# 3: rules ary name
+# 4: custom method specifier, ab-style
+prune_select (){ local -n psa_=$1 pca_=$2 pra_=$3; local -i i j l="${pca_[_len]:-0}" n v first multi; local k pc t tn
+  # first mark things into *|pflags
+  first=${4::1}; multi=${4:1:1}
+  for pc in "${pra_[@]}"; do k=${pc%%|*}; pc=${pc#*|}; v=${pc%|*}; n=${pc#*|}; tn=""; j=0
+    for ((i=0; i<l; i++)); do
+      # special for borg checkpoint archives (borgv1): flag if it is the youngest archive in the set
+      if ((aBORGVN<200)) && [[ "${pca_[$i|flags]}" = *"unfin"* ]]; then ((i)) || pca_[0|pflags]="is_nocount "; continue; fi
+      t="${pca_[$i|time]}"
+      ((first)) && tn="${pca_[$((i+1))|time]}"
+      case $k in within) t=$(tsdate "$t") && ((t > n)) || break
+                         pca_[$i|pflags]+="is_${k}#$((++j)) "
+                         continue
+                         ;;
+                 weekly) t=$(date '+%G-%V' -d "$t" 2>/dev/null)
+                         ((first)) && [ "$tn" ] && tn=$(date '+%G-%V' -d "$tn" 2>/dev/null)
+                         v=7
+                         ;;
+              quarterly) t=$(date '+%Y-%q' -d "$t" 2>/dev/null)
+                         ((first)) && [ "$tn" ] && tn=$(date '+%Y-%q' -d "$tn" 2>/dev/null)
+                         v=6
+                         ;;
+      esac
+      if [ "${t::$v}" != "${tn::$v}" ]; then tn="$t"
+        if ((multi)) || [[ "${pca_[$i|pflags]}" != *is_* ]]; then
+          pca_[$i|pflags]+="is_${k}#$((++j)) "
+          ((j == n)) && break
+        fi
+      fi
+    done
+    [ "$k" != "within" ] && ((j < n)) && pca_[$((i-1))|pflags]+="is_aging_${k}#$((j+1)) "
+  done
+  # finally "select" the non-marked, NOT considering further special flags
+  for ((i=0; i<l; i++)); do [[ "${pca_[$i|pflags]}" != *is_* ]] && psa_+=("$i"); done
+}
+
+##############################################################################
+# %Class Handlers
+
+# Job Task Wrapper using $1 (job class),  $2 ("A"|"S") and inherited
+# vars to handle task sequence & surrounding infos in simple fashion
+_jctw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK_JOB" aMSGPRE="$aMSGPRE"
+  [ "${o^^}" == "C" ] && o="CP" || o="PC"
+  for ((i=0; i<${#o}; i++)); do
+    case ${o:$i:1} in C) a="create" ;;
+                      P) a="prune"  ;;
+                      *) error "OOPS!"; return 1  ;;
+    esac
+    aMSGPRE="${je}.${a}"
+    t="ja_[_do_$a]"
+    if ((t)); then
+      SNAPBACK_JOB="${je}.${a}.pre"
+      if run_custcmd log "Pre-Task Cmd" "${ja_[${a}_pre]}"; then
+        timer_start TASK
+        ! declare -F "_jc_${1}_$a" >/dev/null && error "OOPS!" && return 1
+        "_jc_${1}_$a" || r=$?
+        timer_time  TASK tt && info "• Finished after ${tt}s, status $r"
+        SNAPBACK_JOB="${je}.${a}.post"
+        SNAPBACK_JOB_STATUS=$r
+        run_custcmd log "Post-Task Cmd" "${ja_[${a}_post]}"
+      else warn "Skipped after pre-cmd"
+      fi
+    else inopts "$2" && msg "n/c" "---$2"
+    fi
+  done
+  return "$r"
+}
+# Replace placeholders in $1 acc. to $repl hash
+_jcprepl (){ local k n="$1"; for k in "${!repl[@]}"; do n="${n//"{$k}"/${repl[$k]}}"; done; echo "$n"; }
+
+# JC Handler: archive handling acc. to job info $1
+jc_archive (){ local -n ja_=$1;
+               local -r node="${ja_[_jn]}" rnode="${ja_[repo]}"
+               local -ra rba=("${gNDC[$rnode|path]}" "$(node_get_pass "$rnode")")
+               local -i rc=0 rp=0; local tt
+               local -A repl=(
+                 [NODE]="$node"
+                 [JOBI]="${ja_[_ji]}"                [JOBN]="$SNAPBACK_JOB"
+                 [DEVN]="${gNDC[$node|_dev]:-_}"     [UUID]="${gNDC[$node|_uuid]:-_}"
+                 [SVOL]="${gNDC[$node|_svol]:-_}"    [SVID]="${gNDC[$node|_svid]:-_}"
+                 [TNOW]="_"  [SNUM]="_"  [STIM]="_"  [TSYN]="_"
+               )
+  info "Using repo $rnode"
+  ((${ja_[_bid]})) && info "Using ${aBORGS[${ja_[_bid]}|cf]}, v${aBORGS[${ja_[_bid]}|vs]}"
+  _jctw archive A
+}
+_jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0; local snode tfmt k v it
+  ((aBORGVN<200)) && tfmt="+%FT%T" || tfmt="+%FT%T+00:00"
+  # get the snapped node - if applicable
+  [ "${gNDC[$node|_scfg]}" ] && snode="$node"
+  [ ! "$snode" ] && v="${gNDC[$node|base]}" && [ "$v" ] && [ "${gNDC[$v|_scfg]}" ] && snode="$v"
+  # Create & lock snaphot for archiving
+  # 1: result ary - for compat with _assel()
+  # 2: snaptag
+  # 3: keep_flag
+  _asnew (){ local -n ra_=$1; local -i r=0; local m n t sc="${gNDC[$snode|_scfg]}" sn
+    (($3)) || m="temporary "
+    ((cfDRYRUN)) && msg "Dryrun disabled snapshot creation" -DRY && return 0
+    sn="$cfSNAPSHOT_LOCK_PREFIX$2"; ((!$3)) && sn="$cfSNAPSHOT_TEMP_PREFIX$sn" # tag for actual creation
+    n=$(run_snapper - "$sc" -q create -c "$sn" -p) && t=$(node_get_snaptime "$snode" "$n") && t=$(tsdate "$t") || r=1
+    ((r)) && error "Failed creating snapshot, Snapper reported \"$n\"" && return 1
+    info "Created $m#$n"
+    if (($3));
+      then xSNAPLOCKS["$snode"]=1 && xvmsg A "⮡ Locked #$n"
+      else xTMPSNAPS+=("$n|$sc")  && xvmsg A "⮡ Locked & marked #$n for exit-deletion"
+    fi
+    ra_+=("$n|$t")
+  }
+  # Select & lock snaphots for archiving
+  # 1: result ary (num|timestamp)
+  # 2: last archive timestamp
+  # 3: snaptag(s)
+  # 4: max to check
+  # 5: max to return
+  _assel (){ local -n ra_=$1; local -A sa; local -i i mc=$(($4-1)) mr=$5
+    node_get_snaps sa "$snode" "$3" "$mc"
+    ((sa[_len])) || return 0
+    ((sa[_len] <= mc)) && mc=$((sa[_len] - 1)) # limit to what we got
+    for ((i=0; i<=mc && mr; i++)); do
+      t=$(tsdate "${sa[$i|time]}") || return 1
+      ((t<=$2)) && break
+      xvmsg A "Found new #${sa[$i|num]}, tag '${sa[$i|tag]}', date '${sa[$i|time]}'"
+      node_snaplock SET "$snode" "${sa[$i|num]}" && xSNAPLOCKS["$snode"]=1 && xvmsg A "⮡ Locked #${sa[$i|num]}"
+      ra_+=("${sa[$i|num]}|$t"); ((mr--))
+    done
+    :
+  }
+  # Run borg incl. bind mount wrapping & prefixing stuff
+  # 1:node, 2:snapshot num (0-alike for classic path), 3+ extra args (not in $args & w/o archive name & path)
+  _arwrap (){ local a=$(_jcprepl "${ja_[_ac_name]}") adir mp t; local -i r=0
+    if [ "${ja_[_ac_suff]}" ]; then
+      t=$(_jcprepl "${ja_[_ac_suff]}")
+      xvmsg A "⮡ Using cache suffix '$t'"
+      declare -x BORG_FILES_CACHE_SUFFIX="$t"
+    fi
+    (($2)) && t=" #$2" || t=" path"
+    ((aBORGVN<200)) && a="::$a"
+    info "Creating $a from $1$t"
+    ! node_bmnt "$1" "$2" adir "${ja_[create_prefix]}"      && error "Could not prep or bind $1$t" && r=1
+    ((!r)) && ! cd "$adir"                                  && error "Could not cd to $adir"       && r=1 # borg v1.2.x needs cd!
+    ((!r)) && ! run_borg log "${args[@]}" "${@:3}" "$a" . && r=1
+    ((!r)) && info  "• Created ok"
+    cd "$cfETCDIR"
+    ! node_bmnts_clr "$1"                                   && warn  "Could not clear bind mount(s) for $1"
+    ((!r))
+  }
+  # shellcheck disable=SC2206
+  [ "${ja_[create_borg_genopts]}" ]     && args+=(${ja_[create_borg_genopts]})
+  args+=(create); ((cfDRYRUN)) && args+=(-n)
+  ((ja_[create_no_samefs]))             || args+=(-x)
+  ((ja_[create_numids]))                && args+=(--numeric-ids)
+  [ "${ja_[create_cachemode]}" ]        && args+=(--files-cache "${ja_[create_cachemode]}")
+  [ "${ja_[create_compression]}" ]      && args+=(-C "${ja_[create_compression]}")
+  [ "${ja_[create_pattern]}" ]          && args+=(--pattern "${ja_[create_pattern]}")
+  if t=$(chk_suppfile "${ja_[create_patternfile]}");
+    then                       [ "$t" ] && args+=(--patterns-from "$t")
+    else cfgerr "patternfile not found or bad: '$t'" && r=1
+  fi
+  ((ja_[create_exclude_caches]))        && args+=(--exclude-caches)
+  [ "${ja_[create_exclude_tagfile]}" ]  && args+=(--exclude-if-present "${ja_[create_exclude_tagfile]}")
+  ((ja_[create_exclude_tagkeep]))       && args+=(--keep-exclude-tags)
+  [ "${ja_[create_exclude_pattern]}" ]  && args+=(--exclude "${ja_[create_exclude_pattern]}")
+  if t=$(chk_suppfile "${ja_[create_exclude_patternfile]}");
+    then [ "$t" ]                       && args+=(--exclude-from "$t")
+    else cfgerr "exclude_patternfile not found or bad: '$t'" && r=1
+  fi
+  #FIXME: ?? move comment & cmdopts (as overrides) into wrapper to expand more placeholders in comment?
+  [ "${ja_[create_comment]}" ]          && args+=(--comment "$(_jcprepl "${ja_[create_comment]}")")
+  [ "${ja_[create_borg_cmdopts]}" ]     && args+=("${ja_[create_borg_cmdopts]}")
+  ((!r)) && node_get_lat lat "$rnode" "$(_jcprepl "${ja_[_ap_filt]}")" || r=1
+  if ((!r)); then
+    if [ ! "$snode" ]; then info "Using path"
+      t=$(date "${ja_[create_time_fmt]}" 2>/dev/null)
+      repl[TNOW]="$t"; repl[STIM]="$t"; repl[TSYN]="$t"
+      _arwrap "$node" 0 || r=1
+    else
+      repl[SNAM]="${gNDC[$snode|_scfg]}"
+      if ((ja_[create_snap_useown])); then info "Using own '${ja_[create_snap_snaptag]}' snapshot"
+        _asnew asns "${ja_[create_snap_snaptag]}" "${ja_[create_snap_keepown]}" || r=1
+      else info "Using '${ja_[create_snap_snaptag]}' snapshots"
+        _assel asns "$lat" "${ja_[create_snap_snaptag]}" \
+          "${ja_[create_snap_maxchk]:-12}" "${ja_[create_snap_maxnum]:-1}"      || r=1
+      fi
+      n=${#asns[@]} && ((!n)) && info "Nothing to do" || info "$n snapshot(s) to archive"
+      for ((i=n-1; i>=0 && r==0; i--)); do # oldest first
+        inopts A && timer_start ITEM
+        v="${asns[$i]}"; j="${v%|*}"
+        repl[TNOW]=$(date "${ja_[create_time_fmt]}" 2>/dev/null)
+        repl[SNUM]="$j"
+        repl[STIM]=$(date "${ja_[create_time_fmt]}" -d "@${v#*|}" 2>/dev/null)
+        repl[TSYN]="${repl[STIM]}"
+        _arwrap "$node" "$j" --timestamp "$(date -u "$tfmt" -d "@${v#*|}" 2>/dev/null)" || r=1
+        inopts A && timer_time ITEM it && msg "⮡ time: ${it}s" ---A
+      done
+      if ((n)); then
+        xvmsg A "Unlocking snapshots for '$snode'"
+        node_snaplocks_clr "$snode" silent
+      fi
+    fi
+  fi
+  ((!r))
+}
+_jc_archive_prune (){ local -A ptbl; local -a args=("${rba[@]}") prul psel
+                      local -i i j n r=0 s=0; local pm="${ja_[prune_method]}" k v it
+  repl[TNOW]="*"; repl[SNUM]="*"; repl[STIM]="*"; repl[TSYN]="*"
+  # shellcheck disable=SC2206
+  [ "${ja_[prune_borg_genopts]}" ] && args+=(${ja_[prune_borg_genopts]})
+  inopts A && inopts P && msg "method=$pm" --AP
+  if prune_getrules prul ja_; then n=1
+    if [ "$pm" = "borg" ]; then info "Pruning natively with borg"
+      args+=(prune --list); ((cfDRYRUN)) && args+=(-n)
+      for v in "${prul[@]}"; do k="${v%%|*}"
+        case $k in within) args+=(--keep-within "$(( (tCURREPO - ${v##*|}) / 3600 ))H");; # xlat to borg fmt
+                quarterly) args+=(--keep-3monthly "${v##*|}");; # filtered for v>141 in job_get()!
+                        *) args+=(--keep-"$k" "${v##*|}");;
+        esac
+      done
+      # shellcheck disable=SC2206
+      [ "${ja_[prune_borg_cmdopts]}" ]   && args+=(${ja_[prune_borg_cmdopts]})
+      run_borg log "${args[@]}" -a "$(_jcprepl "${ja_[_ap_filt]}")" || r=$?
+    else info "Pruning ${pm#*|}"
+      node_get_archs ptbl "$rnode" "$(_jcprepl "${ja_[_ap_filt]}")" 999 && prune_select psel ptbl prul "${pm%%|*}"
+      n=${#psel[@]}
+      if inopts A && inopts P; then
+        msg "🢃 Candidates" --AP
+        ((aBORGVN<200)) && local ptbl_KEYS=(time name pflags) || local ptbl_KEYS=(time name id pflags)
+        dump_smap ptbl
+        ((n)) && msg "🢃 Selected" --AP && dump_str "${psel[*]}"
+      fi
+      if ((n)); then info "$n to prune"
+        args+=(delete --list); ((cfDRYRUN)) && args+=(-n)
+        # shellcheck disable=SC2206
+        [ "${ja_[prune_borg_cmdopts]}" ] && args+=(${ja_[prune_borg_cmdopts]})
+        for ((i=0; i<n; i++)); do j=${psel[$i]}; s=0 # youngest first to (perhaps) quicken compacting
+          inopts A && timer_start ITEM
+          k="${ptbl[$j|name]}"; v="${ptbl[$j|id]::8}"
+          if ((aBORGVN<200));
+          then run_borg log "${args[@]}" "::$k"           || s=$? # we'll nevertheless continue the loop!
+          else run_borg log "${args[@]}" -a "$k" "aid:$v" || s=$?
+          fi
+          ((s)) && r=$s || info "pruned '$k $v*'"
+          inopts A && timer_time ITEM it && msg "⮡ time: ${it}s" ---A
+        done
+      else info "Nothing to do"
+      fi
+    fi # custom pruning
+  else r=1
+  fi # rules chk
+  ((!r))
+}
+
+# JC Handler: snapshot handling acc. to job info $1
+jc_snapshot (){ local -n ja_=$1
+                local -r node="${ja_[_jn]}"
+  info "Using tag '${ja_[snaptag]}'"
+  _jctw snapshot S
+}
+_jc_snapshot_create (){ local -a args; local -i r=0; local buf
+  args=(-q create -p)
+  [ "${ja_[create_comment]}" ] && args+=(-d "${ja_[create_comment]}")
+  [ "${ja_[snaptag]}" ]        && args+=(-c "${ja_[snaptag]}")
+  ((ja_[create_rw]))           && args+=(--read-write) || args+=(--read-only)
+  if ((!cfDRYRUN)); then
+    buf=$(run_snapper - "${gNDC[$node|_scfg]}" "${args[@]}") || r=$?
+  else buf="00"
+  fi
+  ((r)) && error "Failed, Snapper reported \"$buf\"" || info "Created #$buf"
+  ((!r))
+}
+_jc_snapshot_prune (){ local -A ptbl; local -a prul psel
+                       local -i i k v n r=0 s=0; local pm="${ja_[prune_method]}" it
+  inopts S && inopts P && msg "method=$pm" --SP
+  n=1
+  if [ "$pm" = "snapper" ]; then info "Pruning natively with snapper"
+    if ((!cfDRYRUN)); then
+      run_snapper log "${gNDC[$node|_scfg]}" cleanup "${ja_[snaptag]}" || r=$?
+    fi
+  else info "Pruning ${pm#*|}"
+    if prune_getrules prul ja_; then
+      node_get_snaps ptbl "$node" "${ja_[snaptag]}" 999 && prune_select psel ptbl prul "${pm%%|*}"
+      n=${#psel[@]}
+      if inopts S && inopts P; then
+        msg "🢃 Candidates" --SP
+        local ptbl_KEYS=(time num tag comm flags pflags)
+        dump_smap ptbl
+        ((n)) && msg "🢃 Selected" --SP && dump_str "${psel[*]}"
+      fi
+      if ((n)); then info "$n to prune"
+        for ((i=n-1; i>=0; i--)); do k=${psel[$i]}; v=${ptbl[$k|num]}; s=0 # oldest first!!
+          inopts S && timer_start ITEM
+          [[ "${ptbl[$k|flags]}" =~ (def)|(act) ]] && info "keeping #$v: default or active" && continue
+          if ((!cfDRYRUN)); then
+            run_snapper log "${gNDC[$node|_scfg]}" delete "$v" || s=$? # we'll nevertheless continue the loop!
+          fi
+          ((s)) && r=$s || info "pruned #$v"
+          inopts S && timer_time ITEM it && msg "⮡ time: ${it}s" ---S
+        done
+      else info "Nothing to do"
+      fi
+    else r=1
+    fi # rules chk
+  fi # custom
+  ((!r))
+}
+
+# JC Handler: compact acc. to job info $1
+# Note borg compact supports --dry-run only from v1.4.1
+jc_compact (){ local -n ja_=$1; local -a args; local -r node="${ja_[_jn]}"
+  args=("${gNDC[$node|path]}")
+  ((aBORGVN<200)) && args+=('-') || args+=("$(node_get_pass "$node")")
+  # shellcheck disable=SC2206
+  [ "${ja_[borg_genopts]}" ] && args+=(${ja_[borg_genopts]})
+  args+=(compact); ((cfDRYRUN && aBORGVN>140)) && args+=(-n)
+  # shellcheck disable=SC2206
+  [ "${ja_[borg_cmdopts]}" ] && args+=(${ja_[borg_cmdopts]})
+  ((cfDRYRUN && aBORGVN<141)) || run_borg log "${args[@]}"
+}
+
+# DEV/DEBUG HELPER STUB
+# JC Handler: "custom" job class acc. to job info $1
+jc_custom (){ local -n ja_=$1; local -r node="${ja_[_jn]}"
+
+  return 0
+}
+
+##############################################################################
+# %Cmd Handlers
+
+# Non-public "_precheck", called via general option
+cmd__precheck (){ local -i r=0
+  msg_setlev info
+  info "Checking prerequisites.."
+  chk_pre  # will not return on failure
+  ((r)) || info "No problems found."
+  exit "$r"
+}
+# Non-public "_status", for cmd_show status
+cmd__status (){ local -A ra sa ta; local -a dja qlfa ia; local -i r sc sd sq; local cd nd l m
+  local -r spc="                   "
+  local -r hrs="─────────────────────────────────────────────────────────"
+  dowehave "$cfBIN_ONCAL" && sc=1
+  msg_setlev info
+  chk_conffile
+  case $1 in @)  exit_inperr "'@' without a name is a reserved specifier";;
+             @*) aJQN="${1:1}"; shift;;
+  esac
+  (($#)) && warn "Input: extra argument(s) ignored: '$*'"
+  sq=$((aJQIA[$aJQN|schedule]))
+  tCURREPO=$EPOCHSECONDS
+  if ! vdate tLASTISO "$cfSTATEDIR/@$aJQN" F; then
+    vdate tLASTISO "$cfDF_RESET_TIME" || vdate tLASTISO "today 0"
+    sd=1
+  fi
+  vdate tLASTEPO "$tLASTISO" E; vdate tCURRISO "@$tCURREPO"
+  if sysd_get_timer ra; then
+    ta[result]="${ra[Result]}";                     ta[state]="${ra[ActiveState]}/${ra[SubState]}"
+    ta[last]="${ra[LastTriggerUSec]:4:19}";         ta[next]="${ra[NextElapseUSecRealtime]:4:19}"
+  fi
+  l="${ra[Unit]}"
+  if [ "$l" ] && sysd_query ra "$l" service; then
+    sa[result]="${ra[Result]}";                     sa[state]="${ra[ActiveState]}/${ra[SubState]}"
+    sa[stime]="${ra[ExecMainStartTimestamp]:4:19}"; sa[etime]="${ra[ExecMainExitTimestamp]:4:19}"
+    [ ! "${ra[CPUUsageNSec]//[0-9]}" ] && sa[cputime]="$((ra[CPUUsageNSec] / 1000000))ms"
+  fi
+  info "Status Overview"
+  chk_pidlock; r=$?
+  #1
+  printf '\n\tCurr State  :   '; ((r)) && cprintf active "RUNNING${spc:7}" || cprintf idle "idle${spc:4}"
+  case ${sa[state]} in act*|dea*) m=active;; inact*) m=idle;; rel*) m=warn;; fail*) m=error;; *) m=greyed;; esac
+  cprintf "$m" "   ${sa[state]}\n"
+  #2
+  printf '\tLast Timer  :   '
+  if [[ "${ta[state]}" = "active/run"* ]];
+  then [ "${ta[last]}" ]   && cprintf active '%s   %s\n' "${ta[last]}" "${ta[state]}"        || cprintf greyed 'n/a\n'
+  else case ${ta[result]} in "") m=greyed;; success) m=good;; *) m=warn;; esac
+       [ "${ta[last]}" ]   && cprintf "$m"   '%s%s   '   "${ta[last]}" "${spc:${#ta[last]}}" || cprintf greyed 'n/a%s   ' "${spc:3}"
+       [ "${ta[result]}" ] && cprintf "$m"   '%s   %s\n' "$spc" "${ta[result]}" || printf '\n'
+  fi
+  #3
+  printf '\tLast Proc   :   '
+  if [[ "${sa[state]}" = "act"* ]];
+  then [ "${sa[stime]}" ]  && cprintf active '%s   %s\n' "${sa[stime]}" "${sa[state]}"     || cprintf greyed 'n/a\n'
+  else case ${sa[result]} in "") m=greyed;; success) m=good;; *) m=warn;; esac
+       [ "${sa[stime]}" ]  && cprintf "$m"   '%s - %s' "${sa[stime]}" "${sa[etime]:-$spc}" || cprintf greyed 'n/a%s   %s' "${spc:3}" "$spc"
+       [ "${sa[result]}" ] && cprintf "$m"   '   %s\n' "${sa[result]}" || printf '\n'
+  fi
+  #4
+  printf '\tNext Timer  :   '
+  l="${ta[next]}"
+  case ${ta[state]} in
+    active/wai*) [ "$l" ] || l="n/a"; cprintf idle   '%s%s   '     "$l" "${spc:${#l}}" && cprintf good '%s\n' "${ta[state]}";;
+           act*) [ "$l" ] || l="---"; cprintf active '%s%s   %s\n' "$l" "${spc:${#l}}" "${ta[state]}";;
+              *) case ${ta[state]} in inact*|dea*|rel*) m=warn;; fail*) m=error;; *) m=greyed;; esac
+                 [ "$l" ] || l="n/a"; cprintf "$m"   '%s%s   %s\n' "$l" "${spc:${#l}}" "${ta[state]}";;
+  esac
+  #5
+  cprintf line '\t%s\n' "$hrs"
+  printf '\tThis Queue  :  '
+  if ((sq && sc));
+  then ((sd)) && cprintf warn   "*$tLASTISO   " || cprintf std    " $tLASTISO   "
+  else ((sd)) && cprintf greyed ' %s   ' "$spc" || cprintf greyed " $tLASTISO   "
+  fi
+  printf '%s%s' "$aJQN" "${spc:${#aJQN}}   "
+  if ((sq));
+  then ((sc)) && m=std || m=greyed; cprintf "$m" "$cfOUTPUT_SYM_SCHED"
+  fi
+  printf '\n'
+  #6,7
+  qlf_get qlfa "$aJQN" NOFIX
+  if ((sq)); then
+    qla_get_sched dja "$tLASTEPO" "$tCURREPO" "*"
+    for l in "${dja[@]}"; do m=""
+      readarray -td\| ia <<<"$l|"
+      case ${l: -1} in D) [ ! "$cd" ] && m="cd";; N) [ ! "$nd" ] && m="nd";; esac
+      [ "$m" ]  && printf -v "$m" '%s : %s' "${ia[3]}" "${ia[0]}"
+      [ "$cd" ] && [ "$nd" ] && break
+    done
+    printf '\tCurr Due #1 :   ' && if ((sc)); then [ "$cd" ] && cprintf due    "$cd\n" || cprintf good "none\n"; else cprintf greyed "none\n"; fi
+    printf '\tNext Due #1 :   ' && if ((sc)); then [ "$nd" ] && cprintf nondue "$nd\n" || cprintf due  "none\n"; else cprintf greyed "none\n"; fi
+  fi
+  cprintf line '\t%s\n' "$hrs"
+  # qlist
+  if   ((r));  then printf '\t🢃 Processing\n'    && dump_jobs qlfa queued
+  elif ((sq)); then printf '\t🢃 QList/Backlog\n' && dump_jobs qlfa backlog
+  else              printf '\t🢃 QList\n'         && dump_jobs qlfa qlist
+  fi
+  #sched
+  ((sq)) && printf '\t🢃 Schedule\n' && dump_jobs dja X
+  echo
+}
+
+cmd_help (){ local cp helpv="$1"
+  case $# in 0)echo "$hHELP_help" >&2; exit 1;; 1);; *)warn "Input: extra argument(s) ignored";; esac
+  if complete_ulc helpv variable hHELP_ cp;
+    then echo "${!helpv}" >&2
+    else error "$cp help topic '$1'"; echo "$hHELP_help" >&2
+  fi
+  exit 1
+}
+cmd_dumpcfg (){
+  ((EUID)) && exit_err "$cMSG_EROOT"
+  [ "${FUNCNAME[1]}" = "main" ] && chk_conffile  # special for dumping bad cfg from proc_args
+  chk_unclean W
+  (($# > 1)) && exit_inperr "Only one file name argument allowed!"
+  #[ ! "$1" ] && echo "---" && echo "$aCFGCACHE" && exit 0
+  if [ ! "$1" ] || [ "$1" = '-' ]; then echo '---'; echo "$aCFGCACHE"; return 0; fi
+  cd "$xIWD" &>/dev/null  # $1 may be rel. to initial dir, so make sure to be there
+  chk_dumpfile "$1"                   || exit_err "Bad dump file name: $1"
+  echo "$aCFGCACHE" >"$1" 2>/dev/null || exit_err "Error dumping to $1"
+  info "Preprocesed cfg dumped to $(realpath "$1")"
+}
+cmd_qlist (){ local -a jla fja fna; local -i f i j r=0; local spc cn fn ln qn t
+  [ "$cfSTATEDIR" ] || return 1 # just to be sure
+  msg_setlev info
+  chk_conffile
+  chk_unclean
+  cn="$1"; shift
+  case $cn in sh*|l*) cn="show";; c*) cn="clear";; se*) cn="set";; a*) cn="add";; su*) cn="sub";;
+              "") cmd_help qlist; return 1;;
+              *)  error "Invalid or ambiguous qlist action: '$cn'"; cmd_help qlist; return 1;;
+  esac
+  ln="$1"; shift
+  if [ "$cn" = "show" ];
+    then [ "$ln" ] && [ ! "$ln" = "@" ] || ln="@*" # special: list all per default
+    else set_pidlock
+  fi
+  [[ "$ln" == "@"* ]]     || exit_inperr "No qlist specifier for 'qlist $cn'"
+  [ "$ln" = "@" ]         && exit_inperr "'@' without a name is a reserved qlist specifier"
+  chk_varclass "$ln" glob || exit_inperr "Invalid qlist specifier for 'qlist $cn': '$ln'"
+  ln="${ln:1}"
+  # shellcheck disable=SC2206
+  fna=("$cfSTATEDIR"/@$ln)
+  case $cn in add|set|sub) ((!$#)) && exit_inperr "No jobs specified for 'qlist $cn @$ln'"
+                           qla_collate jla 0 "$@" || exit_err "Job collation aborted!"
+                           ;;
+                        *) (($#))  && warn "Input: extra argument(s) ignored: '$*'";;
+  esac
+  j=${#jla[@]}
+  case $cn in  show) info "QLists matching '$ln'"; echo;;
+              clear) info "Clearing QList '$ln'";;
+                set) info "🢃 Setting QList '$ln'"           && dump_jobs jla qlist
+                     ((!j)) && info "None to set, clearing!" && cn="clear";;
+                add) info "🢃 Adding to QList '$ln'"         && dump_jobs jla qlist
+                     ((!j)) && info "None to add!"           && return 0;;
+                sub) info "🢃 Subtracting from QList '$ln'"  && dump_jobs jla qlist
+                     ((!j)) && info "None to subtract!"      && return 0;;
+  esac
+  xvmsg L "🢃 Selected QLists" && dump_ary fna
+  for fn in "${fna[@]}"; do f=0; qn="${fn##*/}"; qn="${qn:1}"
+    case $cn in  show) qlf_get fja "$qn" NOFIX
+                       spc="                              "
+                       if ((aJQIA[$qn|schedule]));
+                       then printf '\t🢃 %s%s%s\n' "$qn" "${spc:${#qn}}" "$cfOUTPUT_SYM_SCHED"; dump_jobs fja X
+                       else printf '\t🢃 %s\n' "$qn"; dump_jobs fja qlist #std
+                       fi
+                       ;;
+                clear) qlf_upd "$qn" ""  ;;
+                  set) qlf_upd "$qn" jla ;;
+                  add) qlf_get fja "$qn" && qla_merge fja fja jla || fja=("${jla[@]}")
+                       qlf_upd "$qn" fja ;;
+                  sub) # short lists, so ok to loop all the way
+                       if qlf_get fja "$qn"; then for t in "${jla[@]}"; do qla_del_job fja "${t%%|*}" && f=1; done; fi
+                       ((!f)) || qlf_upd "$qn" fja
+                       ;;
+    esac
+    (($?)) && r=1 || case $cn in show) ;; *) info "• Updated $qn";; esac;
+    ((i++))
+  done
+  ((i)) || printf '\t(no matching active list)\n'
+  [ "$cn" = "show" ] && echo
+  ((!r))
+}
+cmd_reset (){ local k t
+  msg_setlev info
+  chk_conffile
+  aSHOW_RUN_TIME=1
+  set_pidlock # implies root check
+  case $1 in
+      --all) shift
+             t="$*"; [ "$t" ] || t="$cfDF_RESET_TIME"
+             date -d "$t" &>/dev/null || exit_err "Bad date/time specifier: '$t'"
+             if ((${#cfSTATEDIR} > 5)); then # Extra check, then delete per dir
+               rm -f "$cfSTATEDIR"/*        &>/dev/null    # std. state files
+               rm -f "$cfSTATEDIR"/jlast/*  &>/dev/null    # per_job lastruns
+             fi
+             # and recreate schedule lastruns
+             for k in "${!aJQIA[@]}"; do
+               [[ "$k" = *"|schedule" ]] && ((aJQIA[$k])) && touch -d "$t" "$cfSTATEDIR/@${k%%|*}" &>/dev/null
+             done
+             info "Lastruns reset to '$t' = $(date '+%F %T' -d "$t")"
+             ;;
+    --stale) ;;
+          *) cmd_help reset;; # exits
+  esac
+  info "Performing late cleanup"
+  clean_late # not requiring the .cln semaphore here
+}
+cmd_run (){ local -a args; local os q t
+  _runat_prep (){
+    #xRUNAT="$1"
+    tRUNATSEC=$(tsdate "$1") || return 1
+    #tRUNATISO=$(date '+%F %T' -d "@$tRUNATSEC")
+    ((tRUNATSEC -= EPOCHSECONDS))
+    if ((tRUNATSEC < 0)); then [ "${*,,}" = "now" ] && tRUNATSEC=0 || return 1; fi
+    xRUNARGS=(
+      "--on-active=$tRUNATSEC"
+      "--timer-property=AccuracySec=1s"
+      "--working-directory=$xIWD"
+      "$(realpath "$0")"
+    )
+    shift; while (($#)); do case $1 in --);; --at)shift;; *)xRUNARGS+=("$1");; esac; shift; done
+  }
+  chk_conffile
+  ((EUID)) && exit_err "Must be root to process jobs!" # early check, as pidlock stuff needs to be later
+  if ! os=$(getopt -n "" \
+    -o n \
+    -l dryrun,at:,nocreate,noprune \
+    -l addlast,noaddlast,backlog,nobacklog,cleanall,nocleanall,complast,nocomplast \
+    -l perjob,noperjob,rescan,norescan,settimer,nosettimer,snapfirst,nosnapfirst,surrender \
+    -- "$@" 2>&1);
+  then exit_getopterrs "$os"; fi
+  eval set -- "$os"
+  while (($#)); do
+	  case $1 in
+      -n|--dryrun)    cfDRYRUN=1            ;;
+      --at)           ((!envSYSD)) && error "Timed runs require systemd!" && return 1
+                      cfTIMEDRUN=1; shift
+                      _runat_prep "$1" "${xARGS[@]}" || exit_inperr "Bad date/time '$1'" ;;
+      --addlast)      cfQUEUE_ADDLAST=1     ;;
+      --backlog)      cfQUEUE_NOBACKLOG=0   ;;
+      --cleanall)     cfQUEUE_CLEANALL=1    ;;
+      --complast)     cfQUEUE_COMPLAST=1    ;;
+      --noaddlast)    cfQUEUE_ADDLAST=0     ;;
+      --nobacklog)    cfQUEUE_NOBACKLOG=1   ;;
+      --nocleanall)   cfQUEUE_CLEANALL=0    ;;
+      --nocomplast)   cfQUEUE_COMPLAST=0    ;;
+      --nocreate)     cfNOCREATE=1          ;;
+      --noperjob)     cfQUEUE_NOPERJOB=1    ;;
+      --noprune)      cfNOPRUNE=1           ;;
+      --norescan)     cfQUEUE_NORESCAN=1    ;;
+      --nosettimer)   cfSYSTEMD_SETTIMER=0  ;;
+      --nosnapfirst)  cfQUEUE_SNAPFIRST=0   ;;
+      --nosurrender)  cfPIDLOCK_SURRENDER=0 ;;
+      --perjob)       cfQUEUE_NOPERJOB=0    ;;
+      --rescan)       cfQUEUE_NORESCAN=0    ;;
+      --settimer)     cfSYSTEMD_SETTIMER=1  ;;
+      --snapfirst)    cfQUEUE_SNAPFIRST=1   ;;
+      --surrender)    cfPIDLOCK_SURRENDER=1 ;;
+      --|"")          ;;
+		  *)  [ ! "$q" ] && ((!${#args[@]})) && [ "${1::1}" = "@" ] && q="$1" || args+=("$1");;
+	  esac
+	  shift
+  done
+  [ "$q" ] && ! chk_varclass "$q" file && exit_inperr "Bad queue name"
+  aJQN="${q:1}"; [ ! "$q" ] && ((!${#args[@]})) && aJQN="@"
+  case $aJQN in
+    @)  t="@ (standard)"; ! dowehave "$cfBIN_ONCAL"  && cfQUEUE_NORESCAN=1 && cfSYSTEMD_SETTIMER=0 && cfQUEUE_NOPERJOB=1 ;;
+    "") t="(unnamed)"; ((!${#args[@]})) && exit_inperr "Job argument(s) required"
+                                 cfQUEUE_NOBACKLOG=1 && cfQUEUE_NORESCAN=1 && cfSYSTEMD_SETTIMER=0 && cfQUEUE_NOPERJOB=1 ;;
+    *)  t="$aJQN";        ((!aJQIA[$aJQN|schedule])) && cfQUEUE_NORESCAN=1 && cfSYSTEMD_SETTIMER=0 && cfQUEUE_NOPERJOB=1 ;;
+  esac
+  if ((cfDRYRUN)) || inopts C; then
+    msg_chklev info && info "🢃 Run Options" && printf '\tUsing Queue     : %s\n' "$t" && dump_flags cRUNFLAG_INFO
+  fi
+  if ((cfDRYRUN)); then
+    [ "$cfOUTPUT_BORG" != "debug" ] && cfOUTPUT_BORG=info
+    msg_setlev info
+    ((cfTIMEDRUN)) && msg "Dryrun disabled timed execution" -DRY && cfTIMEDRUN=0
+  elif ((!envTTY)); then
+    [ -f "$cfSTATEDIR/_.norun" ] && warn "NORUN found set, aborting" && return "$cERR_NORUN"
+    chk_snooze
+  fi
+  if ((cfTIMEDRUN)); then
+    chk_unclean
+    ! t=$(systemd-run "${xRUNARGS[@]}" 2>&1) && error "Could not register for systemd-run" && return 1
+    t=${t##* }; t=${t%.*}
+    info "Registered for systemd-run with id '$t'" && return 0
+  fi
+  aSHOW_RUN_TIME=1
+  set_pidlock       # implies check for root
+  chk_unclean; set_unclean
+  init_ipc
+  snapper_getnames
+  get_borgs
+  ((cfSYSTEMD_SETTIMER)) && sysd_upd_dropin # not exiting on failure
+  jpq_build "${args[@]}" && jqp
+  (($? == cERR_BACKLOG)) && return $cERR_BACKLOG || :
+}
+cmd_settimer (){
+  ((EUID)) && exit_err "$cMSG_EROOT!"
+  chk_conffile
+  aSHOW_RUN_TIME=1
+  chk_unclean
+  (($#)) && warn "Input: extra argument(s) ignored: '$*'"
+  sysd_upd_dropin STANDALONE
+}
+cmd_show (){ local -A aa; local -a ia ja; local buf e j l s t spca spcb
+  local -A prior=([cfOUTPUT_VERBOSITY]="$cfOUTPUT_VERBOSITY" [cfOUTPUT_OPTIONS]="$cfOUTPUT_OPTIONS")
+  msg_setlev info; cfOUTPUT_OPTIONS=""
+  chk_conffile
+  chk_unclean
+  case $1 in
+    # colors
+    col*) info "Colors Overview"
+          printf '\n\t%s\n' "🢃 Color Conf Vars"
+          readarray -t ia < <(compgen -A variable "cf")
+          for e in "${ia[@]}"; do
+            [[ "$e" == *OUTPUT_COLOR* ]] || continue
+            [ "${prior[$e]+set}" ] && aa[$e]="${prior[$e]}" || aa[$e]="${!e}"
+          done
+          ((!${#aa[@]})) && cprintf greyed '\t(none)\n' || dump_dmap aa
+          printf '\n\t%s\n' "🢃 Custom Color Definitions"
+          ((${#aCCF_CUSTOM[@]})) && dump_dmap aCCF_CUSTOM || cprintf greyed '\t(none)\n'
+          if ((cfOUTPUT_COLORS_ENABLED)) && ((${#aCOLORS[@]})); then
+            printf '\n\t%s\n' "🢃🢃 Effective Colors ($aTTYCOLORS)"
+            cprintf data '\n\t%s\n' "🢃 Output Colors"
+            spca='        '; spcb='                             '
+            local -a ocna=(error warn good greyed cmdout ctrace data xverb qlist due nondue backlog queued active idle line)
+            local -A ocnd=(
+              [error]="Error Messages/Info" [warn]="Warning Messages/Info" [good]="Good/OK Info"      [greyed]="De-emphasized Info"
+              [cmdout]="Command Outputs"    [ctrace]="Call Traces"         [data]="Data Dumps"        [xverb]="Extra Outputs"
+              [qlist]="Generic QLists"      [due]="Due Jobs"               [nondue]="Nondue Jobs"     [backlog]="Backlogged Jobs"
+              [queued]="Queued Jobs"        [active]="Active/Running Info" [idle]="Idle/Waiting Info" [line]="Separators"
+            )
+            for e in "${ocna[@]}"; do
+              cprintf data '\t%s%s: ' "$e" "${spca:${#e}}"
+              s="████ ${ocnd[$e]}"
+              cprintf "$e" '%s%s' "$s" "${spcb:${#s}}"
+              cprintf data ": %s\n" "${aCOLORS[$e]}"
+            done
+            cprintf data '\n\t%s\n' "🢃 Mapped System Colors"
+            spca='  '; spcb='               '
+            for ((j=0; j<8; j++)); do
+              cprintf data '\t.%u%s: ' $j "${spca:${#j}}"; s="████ $j normal"; cprintf ".$j"  '%s%s' "$s" "${spcb:${#s}}"
+              cprintf data '.b%u%s: '  $j "${spca:${#j}}"; s="████ $j bright"; cprintf ".b$j" '%s%s' "$s" "${spcb:${#s}}"
+              l=$((j+8))
+              cprintf data '.%u%s : '  $l "${spca:${#l}}"; s="████ $l";        cprintf ".$l" '%s\n'  "$s"
+            done
+          else printf '\n\tColors Disabled\n'
+          fi
+          echo
+          ;;
+    # config
+    con*) [ "$2" ] && t=" matching '*$2*'"
+          info "🢃 Global Conf Vars$t"
+          readarray -t ia < <(compgen -A variable "cf")
+          for e in "${ia[@]}"; do
+            [[ "$e" == *"${2^^}"* ]] || continue
+            [ "${prior[$e]+set}" ] && aa[$e]="${prior[$e]}" || aa[$e]="${!e}"
+          done
+          ((!${#aa[@]})) && cprintf warn '\t(no matches)\n' && return 1 || dump_dmap aa
+          ;;
+    # jobinfo
+    j*)   shift; snapper_getnames; get_borgs
+          info "Job Info for '$*'"
+          qla_collate ja 0 "$@"     || exit_err "Job collation aborted!"
+          ((!${#ja[@]}))            && cprintf warn '\t%s\n\n' "(no valid jobs selected)"    && return 1
+          spca='                   '
+          for e in "${ja[@]}"; do j="${e%%|*}"; aa=()
+            printf '\n\t%s\n' "🢃 $j"
+            ! job_get aa "$j"       && cprintf error '\tBad job cfg!\n'                      && continue
+            dump_dmap aa
+            if [ "${aa[_tlast]}" ];
+            then cprintf std    '\t⮡ Last:\t\t%s\n' "$(date '+%F %T' -d "@${aa[_tlast]}")"
+            else cprintf greyed '\t⮡ Last:\t\tn/a\n'
+            fi
+            for l in "${!aa[@]}"; do
+              if [[ "$l" = "schedule_"* ]]; then
+                s="${aa[$l]}"; l="${l:9}"
+                vdate t "$cfSTATEDIR/@$l" FE || vdate t "$cfDF_RESET_TIME" E || vdate t "today 0" E
+                readarray -td\| ia < <(qla_add_ind "$t" "$EPOCHSECONDS" "*" <<<"$j|$s")
+                case ${ia[4]::1} in D)s=due;; N)s=nondue;; E)s=error;; *)s=greyed;; esac
+                cprintf "$s" '\t⮡ Next:\t\t%s%s %s\n' "${ia[2]}" "${spca:${#ia[2]}}" "$l"
+              fi
+            done
+          done
+          ;;
+    # nodeinfo
+    nod*) snapper_getnames
+          info "Node Info for '$2'"
+          readarray -t ia < <(cfq - nodesbyname "$2")
+          [ ! "${ia[0]}" ]  && cprintf warn  '\t%s\n\n' "(no matching node)" && return 1
+          for e in "${ia[@]}"; do
+            printf '\n\t%s\n' "🢃 $e"
+            ! node_get "$e" && cprintf error '\tBad node cfg!\n'             && return 1
+            dump_dmap gNDC "$e"
+          done
+          ;;
+    # notification
+    not*) unset "cfNOTIFY_NOTTYMUTE" # we never want this when testing notifications!
+          [ ! "$cfNOTIFY_DBUS_USER" ] && [ ! "$cfNOTIFY_DBUS_ADDR" ] && [ ! "$cfNOTIFY_CUSTOM_COMMAND" ] && \
+            exit_err "No notification means configured!"
+          if [ "$2" ];
+            then info "Sending notification"; notify log "$2" "$3" "exit_reason: FIN\nerrors: 0\nwarnings: 0\n"
+            else info "Sending default test notification"
+                 notify log "Important Message" \
+"​\nOnly $(( (2942978400 - $EPOCHSECONDS)/86400 )) days until First Contact Day.\n​\n
+Time to get prepared for <b>meeting</b> intelligent beings, <b>not for scaring them off</b>!" \
+"exit_reason: FIN\nerrors: 0\nwarnings: 1\nmessages:\n  - W Mankind in trouble\n"
+          # CAUTION: U+200B chars used above to get empty lines!
+          fi
+          e=$?; ((e)) && error "Error sending notification" && return "$e" || info "Successfully sent notification"
+          ;;
+    # qlist
+    q*)   shift;&
+    @*)   cmd_qlist show "$@"; return;;
+    # runoptions
+    r*)   info "🢃 Current Run Options" && dump_flags cRUNFLAG_INFO;;
+    # status
+    st*)  shift; cmd__status "$@"; return;;
+    # service
+    se*)  ((!envSYSD)) && exit_err "This needs systemd!"
+          sysd_get_service aa "$2" || exit_err "Could not get service data"
+          info "Overview for ${aa[Id]}"
+          t="${aa[FragmentPath]}"
+          [ -f "$t" ] && buf=$(< "$t") || buf=""
+          printf '\n\t%s\n' "🢃 Basic Cfg" && dump_out "$buf" data
+          printf '\n\t%s\n' "🢃 Status Info"  && dump_dmap aa
+          ;;
+    # timer
+    t*)   ((!envSYSD)) && exit_err "This needs systemd!"
+          sysd_get_timer aa "$2" || exit_err "Could not get timer data"
+          info "Overview for ${aa[Id]}"
+          t="${aa[FragmentPath]}"
+          [ -f "$t" ] && buf=$(< "$t") || buf=""
+          printf '\n\t%s\n' "🢃 Basic Cfg" && dump_out "$buf" data
+          printf '\n\t%s\n' "🢃 Dropin Cfg"
+          if [ "$cfSYSTEMD_TIMER_DROPIN" ]; then t="$t.d/$cfSYSTEMD_TIMER_DROPIN"
+            [ -f "$t" ] && buf=$(< "$t") && dump_out "$buf" data || cprintf error '\t%s\n' "Could not find '$t'!"
+          else cprintf greyed '\t%s\n' "(not configured)"
+          fi
+          printf '\n\t%s\n' "🢃 Status Info"  && dump_dmap aa
+          ;;
+    "")   cmd_help show; return 1;;
+    *)    exit_inperr "Invalid or ambiguous show action: '$1'";;
+  esac
+  echo
+}
+
+# DEV/DEBUG HELPER STUB
+cmd_test (){ local -a args=("$@")
+  info "🢃 Args:" && dump_ary args
+
+}
+
+##############################################################################
+# Main                                                                       #
+##############################################################################
+
+init
+proc_args "$@"
+"cmd_$aCMDNAME" "${aCMDARGS[@]}"

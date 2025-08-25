@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#
+# This wrapper allows some env. vars to be (re-)set properly.
+# The individual executable is to be passed in the first argument.
+
+E_BADARGS=85
+
+ID=$(id -u)
+if [[ "$ID" == "0" ]]; then
+  export XDG_RUNTIME_DIR=$(mktemp -d)
+fi
+
+# extract and set display env. values from passed args, and put all others in params
+for i in "$@"; do
+  case $i in
+    --launch=*)
+      LAUNCH="${i#*=}"
+      shift
+      ;;
+    --xdg-desktop=*)
+      export XDG_CURRENT_DESKTOP="${i#*=}"
+      shift
+      ;;
+    --xdg-runtime=*)
+      export XDG_RUNTIME_DIR="${i#*=}"
+      shift
+      ;;
+    --platformtheme=*)
+      export QT_QPA_PLATFORMTHEME="${i#*=}"
+      shift
+      ;;
+    --platform=*)
+      export QT_QPA_PLATFORM="${i#*=}"
+      shift
+      ;;
+    --display=*)
+      export WAYLAND_DISPLAY="${i#*=}"
+      shift
+      ;;
+    *)
+      params="${params} ${i}"
+      shift
+      ;;
+  esac
+done
+
+# Make sure we got sth to fire up
+if [ -z "$LAUNCH" ]; then
+  echo "`basename $0` requires an executable to wrap!"
+  exit $E_BADARGS
+fi
+
+"$LAUNCH" ${params}
+#EOF

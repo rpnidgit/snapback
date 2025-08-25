@@ -1,0 +1,9 @@
+# Sample borg exclusion pattern file for MS Windows 10 partitions - NON-PREFIXED version
+# Modify as needed
+pagefile.sys
+swapfile.sys
+hiberfil.sys
+PerfLogs/*
+Windows/Temp/*
+$Recycle.Bin/*
+*/AppData/Local/Temp/*

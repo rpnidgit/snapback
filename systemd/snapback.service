@@ -1,0 +1,26 @@
+#
+# "SnapBack-ready" systemd service unit
+#
+# Modify acc. to your demands - but mind the below comments
+#
+[Unit]
+Description="SnapBack Snapshing & Archiving"
+After=nss-user-lookup.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/snapback -c /etc/snapback run
+# Resource Restrictions: SnapBack itself does not consume much,
+# but archiving may well do! So you may wish to limit things.
+# Just weighing down CPU and IO is recommended to start with.
+#CPUQuota=75%
+CPUWeight=20
+IOWeight=20
+
+# SnapBack is meant to be fired up only when needed. So you should
+# normally NOT provide ANY WantedBys or such - with ONE exception:
+# IN CASE your overall setup requires an initial run right after
+# reboots, the most simple - and often overlooked - way is to couple
+# it to some meaningful target.
+#[Install]
+#WantedBy=multi-user.target

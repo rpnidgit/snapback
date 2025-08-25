@@ -1,0 +1,23 @@
+name: Documentation Issue
+description: Report something found wrong or otherwise in need of improvement with the documentation/wiki.
+labels: ["cat: documentation","cat/documentation","status: new","status/new"]
+body:
+  - type: input
+    id: docloc
+    attributes:
+      label: Location
+      description: |
+        If applicable: The location in the documentation (file name, section, line no.).
+    validations:
+      required: false
+  - type: textarea
+    id: request
+    attributes:
+      label: Documentation Issue
+      description: As concisely as possible, describe the issue, possibly giving suggestions for improvement.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        For long sections of text, please use file attachments instead of pasting into the form.

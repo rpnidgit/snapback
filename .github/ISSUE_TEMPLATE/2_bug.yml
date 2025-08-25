@@ -1,0 +1,39 @@
+name: Bug Report
+description: File a bug report.
+labels: ["cat: bug","cat/bug","status: new","status/new"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please provide all details that may help to understand and fix the problem.  
+        Do not forget to search the issue tracker **beforehand** to ensure the bug you found has not already been reported.
+  - type: input
+    id: version
+    attributes:
+      label: SnapBack Version
+      description: |
+        The version this bug was observed with.
+      placeholder: "0.95.0"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Operating Enviroment
+      description: |
+        Details about the environment the bug occurred in:  
+        The name & version of the Linux distribution, **plus** local details that may be relevant to know.
+    validations:
+      required: true
+  - type: textarea
+    id: desc
+    attributes:
+      label: Bug Description & Steps to Reproduce
+      description: |
+        What exactly goes wrong? What steps can others take to see the bug themselves?
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        For logs or other long sections of text, please use file attachments instead of pasting into the form.

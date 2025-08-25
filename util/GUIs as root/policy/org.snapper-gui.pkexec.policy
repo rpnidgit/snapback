@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
+"http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+<policyconfig>
+
+  <vendor>snapper-gui</vendor>
+  <vendor_url>https://github.com/ricardomv/snapper-gui</vendor_url>
+
+  <action id="org.snapper-gui.pkexec.policy.run">
+    <description>Run Snapper GUI as root</description>
+    <message>Authentication is required to run Snapper GUI as root</message>
+    <icon_name>drive-harddisk</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/snapper-gui-wrapper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+</policyconfig>

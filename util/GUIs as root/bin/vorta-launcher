@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Stolen from btrfs-assistant
+#
+# Pass essential env. settings as args to an app wrapper
+# to circumvent pkexec restrictions.
+
+if [[ -z ${SWAYSOCK} && -z ${HYPRLAND_CMD} ]]; then
+  if [[ -z ${QT_QPA_PLATFORMTHEME} ]]; then
+    pkexec vorta-wrapper --xdg-desktop=$XDG_CURRENT_DESKTOP
+  else
+    pkexec vorta-wrapper --xdg-desktop=$XDG_CURRENT_DESKTOP --platformtheme="${QT_QPA_PLATFORMTHEME}"
+  fi
+else
+  pkexec vorta-wrapper --xdg-runtime="${XDG_RUNTIME_DIR}" --platformtheme="${QT_QPA_PLATFORMTHEME}" --platform="${QT_QPA_PLATFORM}" --display="${WAYLAND_DISPLAY}"
+fi
+
+#EOF

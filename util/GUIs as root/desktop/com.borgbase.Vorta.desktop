@@ -1,0 +1,21 @@
+[Desktop Entry]
+Categories=Utility;Archiving;Qt;
+Comment[de_DE]=
+Comment=
+Exec=vorta-launcher
+GenericName[de_DE]=Backup Software
+GenericName=Backup Software
+Icon=com.borgbase.Vorta
+Keywords=borg;
+MimeType=
+Name[de_DE]=Vorta (root)
+Name=Vorta (root)
+Path=
+StartupNotify=true
+StartupWMClass=vorta
+Terminal=false
+TerminalOptions=
+Type=Application
+X-KDE-SubstituteUID=false
+X-KDE-Username=
+

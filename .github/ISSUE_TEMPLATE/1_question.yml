@@ -1,0 +1,24 @@
+name: Question
+description: Questions about SnapBack in general, its installation, configuration or use that could not be answered by the documentation.
+labels: ["cat: question","cat/question","status: new","status/new"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the documentation thoroughly before asking here.  
+
+        **Important:** This is **only** for questions of the stated type!  
+        In particular, this is **not** a help or support place for *borg*, *snapper*, *YAML*, or system components.  
+        For support beyond these limits please do see the appropriate places - or feel free to contact the author's office for consulting.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Please be as concise as possible.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        For logs or other long sections of text, please use file attachments instead of pasting into the form.
+

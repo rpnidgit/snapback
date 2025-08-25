@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ☝️ The issue tracker at Codeberg is preferred
+    url: https://codeberg.org/rpnid/snapback/issues
+    about: Please switch to the main repo's issue tracker at Codeberg if possible.
+  - name: 📚 Documentation
+    url: https://codeberg.org/rpnid/snapback/wiki
+    about: SnapBack Documentation Wiki

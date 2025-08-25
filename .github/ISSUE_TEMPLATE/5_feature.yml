@@ -1,0 +1,28 @@
+name: Feature Request
+description: Request a new feature.
+labels: ["cat: feature","cat/feature","status: new","status/new"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the documentation thoroughly. Maybe the feature already exists?
+  - type: textarea
+    id: reasons
+    attributes:
+      label: "Needs & Benefits"
+      description: |
+        As concisely as possible, describe the benefits the feature will provide or the problems it will try to solve.  
+        Explain how the feature does not add more bloat than value.
+    validations:
+      required: true
+  - type: textarea
+    id: request
+    attributes:
+      label: Feature Description
+      description: As concisely as possible, describe the feature you would like to see added.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        For long sections of code or text, please use file attachments instead of pasting into the form.

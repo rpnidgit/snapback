@@ -1,0 +1,96 @@
+# SnapBack Configuration - Basic Initial Sample/Template
+
+Global:
+# Global Settings
+# Commented values are identical to the system defaults.
+# Settings marked '*' in the explanatory comment may be overridden per cmdline option.
+#
+# May be run as is - AFTER filling in a proper 'statedir'.
+
+  statedir:            #INSERT PROPER PATH
+  #mountdir:           #RECOMMENDED optional mount point for bind mounting, SEE DOCUMENTATION
+  #df_reset_time:      now                  # default "last run" time for resets & missing state info
+                                            # during archiving, e.g. /mnt/snapback
+  #pidlock_maxwaits:   5                    # max retry cycles (~1s each) for acquiring PID locks
+  #umask:              0002                 # umask for own file creations (octal)
+  #noprecheck:         false                # skip checking for prereqs at each startup
+  #bin_oncal:          systemd-analyze      # optional override for systemd-analyze
+  #bin_borg:           borg                 # optional override for std. borg executable
+  #bin_borg_CUSTID:                         # optional extra borg executable(s), SEE DOCUMENTATION
+  #bin_snapper:        snapper              # optional override for snapper executable
+  output:
+    #verbosity:        info                 # * general output verbosity level
+    #options:          ""                   # * specific extra output options
+    #borg:             info                 # borg verbosity level
+    colors:
+      #enabled:        auto                 # * enable colored output: never|auto|always
+      #max:            auto                 # * max colors to use: auto|8|16|256|truecolor|24bit|rgb
+      #relax:          false                # do not check custom defs against assumed capabilities (per curr. max colors)
+      #swap:                                # swap regular/bright variants for the given system color index(es),
+                                            # space separated list of [0-7], e.g. "1 3" for red & yellow
+      custom:
+      # ...                                 # custom color definition(s), SEE DOCUMENTATION
+  queue:
+    #snapfirst:        false                # * queue snapshot jobs first
+    #complast:         false                # * queue compact jobs last
+    #addlast:          false                # * queue individually added jobs after others, not before
+    #cleanall:         false                # * remove completed jobs from all qlists
+    #noperjob:         false                # * ignore individual last run times when looking for due jobs
+    #nobacklog:        false                # * disable job backlogging
+    #norescan:         false                # * disable rescanning for newly due jobs at end of schedule based runs
+    #lasecs:           2                    # lookahead seconds to use at queue buildup, SEE DOCUMENTATION
+  systemd:
+    #timer_name:                            # optional explicit systemd timer name,
+                                            # e.g. snapback.timer (or just snapback)
+    #timer_dropin:                          # optional timer dropin to use for syncing times with schedules,
+                                            # e.g. times.conf
+    #settimer:         false                # enable automatic timer updates from configured schedules
+    #canonicalize:     false                # use canonical OnCalendar values for timer updates
+    #nocalm:           false                # disable calming of superfluous timer reactivations after rescans
+  archive:
+    #df_name_glob:     "{NODE}-*"           # borg v1: default name glob for archives, SEE DOCUMENTATION
+    #df_name_ident:    "{TSYN}"             # borg v1: default individual part for archive names, SEE DOCUMENTATION
+    #df_name:          "{NODE}"             # borg v2: default archive series name, SEE DOCUMENTATION
+    #df_time_fmt:      '+%FT%T'             # default format for time based naming placeholder expansions
+    #df_task_order:    prune,create         # default task order for archive jobs
+    #df_compression:                        # default archive compression method (overriding borg's default)
+    #df_prefix:                             # default path prefix for archived files
+    #df_prune_method:  borg                 # default method for archive pruning
+    #df_snaptag:       archive              # default snaptag for snapshot based archiving
+  snapshot:
+    #df_task_order:    prune,create         # default task order for snapshot jobs
+    #df_prune_method:  snapper              # default method for snapshot pruning
+    #df_snaptag:       ""                   # default snaptag for snapshot jobs
+    #lock_prefix:      BSY_                 # snaptag prefix to use for temp locking
+    #temp_prefix:      TMP_                 # snaptag prefix to use for temp staging only snapshots
+  notify:
+    #nottymute:        false                # enable notifications also when run in TTY sessions
+    on:
+      #fatal:          false                # enable notifications for fatal errors
+      #errors:         false                # enable notifications for errrors
+      #warnings:       false                # enable notifications for warnings
+      #incomplete:     false                # enable notifications for incomplete jobs
+      #signals:        false                # enable notifications for signals
+    dbus:
+      #user:                                # recipient user name or uid for standard dbus notifications
+      #addr:                                # alternative dbus socket address
+      #category:                            # optional notification category to indicate
+      #expire:                              # optional display expiration time (ms)
+      #from:                                # optional custom "app-name", overrides "$(hostname) SnapBack"
+      #icon:                                # optional icon filename or stock icon to display
+      #urgency                              # optional urgency level to indicate: low|normal|critical
+    custom:
+      #command:                             # custom notification command
+      #from:                                # custom "--from" parameter, overrides "$(hostname) SnapBack"
+
+Nodes:
+# Node & Job Definitions & Settings
+
+  # This initial node 'sample' is JUST A DUMMY STUB to
+  # suppress 'no nodes' warnings when checked/run as is.
+  # Replace and complete as needed.
+  replace_me:                               # mandatory node name
+    path:     /                             # mandatory path
+    # ...
+  #...
+

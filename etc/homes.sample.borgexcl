@@ -1,0 +1,14 @@
+# Sample borg exclusion pattern file for /home paths - NON-PREFIXED version
+# Modify as needed
+*~
+.cache/*
+.config/*/cache/*
+.config/VSCodium/logs/*
+.config/VSCodium/User/History/*
+.local/share/*/cache/*
+.local/share/Trash*
+.dbus/*
+.npm/*
+.snapshots/*
+*/Cache/*
+*/GPUCache/*

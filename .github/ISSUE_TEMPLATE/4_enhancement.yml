@@ -1,0 +1,36 @@
+name: Enhancement Suggestion
+description: Suggest an enhancement to existing features or the code.
+labels: ["cat: enhancement","cat/enhancement","status: new","status/new"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is for functional improvements & enhancements of the current implementation.  
+        Do **not** submit issues concerning coding **style**.
+  - type: input
+    id: topic
+    attributes:
+      label: Topic
+      description: |
+        Unless reasonably evident from the title: What feature or topic is this about?  
+        (e.g. *archive creation*, *scheduling*, *snapper invocation*, ...)
+    validations:
+      required: false
+  - type: textarea
+    id: reasons
+    attributes:
+      label: "Needs & Benefits"
+      description: As concisely as possible, describe the benefits of the enhancement or the shortcomings it will resolve.
+    validations:
+      required: true
+  - type: textarea
+    id: request
+    attributes:
+      label: "Enhancement Description/Details"
+      description: As concisely as possible, describe your suggestion in detail.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        For long sections of code or text, please use file attachments instead of pasting into the form.

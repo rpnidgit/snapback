@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# Pass essential env. settings as args to an app wrapper
+# to circumvent pkexec restrictions.
+# The individual executable is to be passed in the first argument.
+
+E_NOARGS=85
+
+# 1st make sure we got sth to fire up
+if [ -z "$1" ]; then
+  echo "`basename $0` requires an executable to launch!"
+  exit $E_NOARGS
+fi
+LAUNCH="$1"
+shift
+
+if [[ -z ${SWAYSOCK} && -z ${HYPRLAND_CMD} ]]; then
+  if [[ -z ${QT_QPA_PLATFORMTHEME} ]]; then
+    pkexec gsu-wrapper --launch="$LAUNCH" "$@" --xdg-desktop=$XDG_CURRENT_DESKTOP
+  else
+    pkexec gsu-wrapper --launch="$LAUNCH" "$@" --xdg-desktop=$XDG_CURRENT_DESKTOP --platformtheme="${QT_QPA_PLATFORMTHEME}"
+  fi
+else
+  pkexec gsu-wrapper --launch="$LAUNCH" "$@" --xdg-runtime="${XDG_RUNTIME_DIR}" --platformtheme="${QT_QPA_PLATFORMTHEME}" --platform="${QT_QPA_PLATFORM}" --display="${WAYLAND_DISPLAY}"
+fi
+
+#EOF

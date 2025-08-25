@@ -1,0 +1,31 @@
+#
+# "SnapBack-ready" systemd timer unit
+#
+# Modify acc. to your demands - but mind the below comments
+#
+[Unit]
+Description="Scheduled SnapBack Runs"
+
+[Timer]
+# If you want SnapBack to dynamically update the timer, do NOT place
+# ANY "On*=" definitions here but put them ALL into an own
+# "<timer name>.d/*" drop-in, and name that one in the SnapBack config.
+# In general, it is recommended to leave this [Timer] section empty
+# in this case, and give everything in the drop-in's.
+#
+# If you do NOT want to use the update feature but prefer to run
+# SnapBack at static times only, you may of course define things
+# right here.
+#OnCalendar=hourly
+#
+# Persistence:
+# With dynamic updates, setting to "true" is recommended to avoid missing
+# triggers that got due while the machine was down - or see the comments
+# at the end of the sample service unit for an alternative.
+# If you got statically timed triggers in reasonably short intervals, or
+# the system is always up at due times, the default (false) is of course
+# fine.
+#Persistent=true
+
+[Install]
+WantedBy=timers.target
