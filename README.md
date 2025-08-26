@@ -37,7 +37,7 @@ A versatile, flexibly configurable wrapper & automation tool for<br/>
   - `systemd-analyze` &nbsp;&nbsp;<sub><sup><code>◀systemd</code></sup></sub>
   - **or** a compatible replacement for its `calendar` command
 - *for archiving*:
-  - [`borg`](https://www.borgbackup.org/) v1.2.4 or later, 1.2.6+ recommended, [see notes](#borg-2x-notes) for v2
+  - [`borg`](https://www.borgbackup.org/) v1.2.4 or later, 1.2.6+ recommended, [see notes](#borg-v2-notes) for v2
 - *for snapshots:*
   - [`snapper`](https://github.com/openSUSE/snapper)
   - recommended: `btrfs` utility &nbsp;&nbsp;<sub><sup><code>◀deb:btrfs-progs</code></sup></sub>
@@ -69,7 +69,7 @@ you need to find a compatible replacement for `systemd-analyze calendar`.
 
 ## Special Notes
 
-### `Borg` 2.x Notes
+### `Borg` v2 Notes
 
 >[!IMPORTANT]
 >- Support for the upcoming v2 is currently still **EXPERIMENTAL**.
