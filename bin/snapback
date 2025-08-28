@@ -169,31 +169,29 @@ declare -ra cVFLT_GLOBAL=( # no general wildcarding nor custom stuff here!
   umask:noct
   )
 declare -ra cVFLT_JOBS=( # wildcards & custom keys ok
-  'X*' 'x*' 'alias:posix' 'group*:posix'  # reserved ok
+  'X*' 'x*' alias:posix 'group*:posix'  # reserved ok
   create prune        # needed for "empty task handling"
   create_comment:noquote create_rw:bool 'create_snap_max*:nint' create_no_samefs:bool create_numids:bool create_prefix:arcpref
   create_cachemode:borgfcm create_compression:borgcpr
-  name_glob:glob name:file
+  'create_exclude_caches:bool' create_exclude_tagfile:file create_exclude_tagkeep:bool
+  'create_*patternfile:path' 'create_*pattern*:borgpat'
+  name:file name_glob:glob
   prune_keep_within:spalnum 'prune_keep_*:nint' prune_method:spalpha
   repo:limname
   'schedule*:schedspec'
   task_order:taskorder
-  '*caches:bool'
   '*disabled:bool'    # from job/task disabling extras
   '*name_ident:file'
   '*own:bool'
-  '*pattern:borgpat' '*patternfile:path'
   '*pre' '*post'
   '*snaptag:inregex'  # most general case here, refined later
-  '*tagfile:file'
-  '*tagkeep:bool'
   '*time_fmt:file'
   '*borg*opts'
   '*' # all others are ok here
   )
 declare -ra cVFLT_NODES=( # no general wildcarding here!
   path:path automount:bool base:limname snappercfg:file repo_method:borgenc 'repo_pass*' repo_version:inregex
-  'X*' 'x*' 'alias:posix' 'group*:posix'  # reserved ok
+  'X*' 'x*' alias:posix 'group*:posix'  # reserved ok
   )
 # Bad chars/stuff to look for, per (own) var classes, leading ! negates the matching
 # Note we cannot use negated classes as we're only dealing with bad chars from the C locale here
