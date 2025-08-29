@@ -8,7 +8,11 @@ once wider feedback got digested and any significant "environmental myopia" base
 
 ## Unreleased
 
-- Nothing yet.
+### Changed
+- exit status handling: now giving more specific codes for some general cases.
+- some job attrib checks: general cosmetics & prepping for improving `archive.create.*pattern` config matters.  
+Blimey: these are atm only crafted for single entries. Not essential, as `*patternfile` is there and common - but clearly to be improved.
+
 
 ## 0.95.0
 
