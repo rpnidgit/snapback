@@ -96,11 +96,37 @@ cDF_NAME_GLOB="{NODE}-*"
 cDF_NAME_IDENT="{TSYN}"
 cDF_TASK_ORDER="prune,*"
 cDF_TIME_FMT="+%FT%T"
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 57a7733 (chg/add cERR_*)
+cERR_GEN=1                # gen error exit code
+cERR_CMD=2                # cmd prob / bad input
+cERR_PRV=3                # missing privs for cmd
+cERR_REQ=4                # missing system reqs
+cERR_CFG=5                # cfg prob
+<<<<<<< HEAD
+<<<<<<< HEAD
+cERR_PIDLOCK=14           # could not get pidlock
+cERR_NORUN=15             # norun sem found set
+cERR_BACKLOG=16           # exited with uncompleted jobs
+=======
 cERR_GEN=1                # exit codes
+cERR_PRIV=2
+cERR_CFG=3
+cERR_PIDLOCK=14
 cERR_NORUN=15
 cERR_BACKLOG=16
+>>>>>>> a40766f (add cERR_PIDLOCK)
+=======
+cERR_PIDLOCK=14           # could not get pislock
+=======
+cERR_PIDLOCK=14           # could not get pidlock
+>>>>>>> 387e71d (chg/add exit codes again)
+cERR_NORUN=15             # norun sem found set
+cERR_BACKLOG=16           # exited with uncompleted jobs
+>>>>>>> 57a7733 (chg/add cERR_*)
 cMAXLOGOPTS="ACSJLNPQT??" # for --debug
-cMSG_EROOT="This must be run as root!"
 cSNOOZE_RPT_SECS=60
 cSNOOZE_CHK_SECS=10
 cSUMRES=1                 # register msgs for summary
@@ -612,7 +638,7 @@ proc_args (){ local -A cfv; local os cmd v
     case $cfOUTPUT_COLORS_MAX in 8|16|256|16777216) aTTYCOLORS="$cfOUTPUT_COLORS_MAX";; esac # forced values
     set_colors
   }
-  chk_getopt || exit_err "GNU enhanced getopt required!"
+  chk_getopt || exit_err "GNU enhanced getopt required!" "$cERR_REQ"
   if ! os=$(getopt -n "" \
     -o -c:hVx:deiqvwn \
     -l cfg:,help,version,precheck,xverb::,yq:,colors::,nocolors,debug,error,info,quiet,verbose,warning \
@@ -655,7 +681,7 @@ proc_args (){ local -A cfv; local os cmd v
   _set_opts
   [ "$cfBIN_YQ" ] || cfBIN_YQ=yq  # set now if not given per environment or option
   if inopts C; then msg "Options done" ---C; ((${#cfv[@]})) && msg "🢃 General Overrides" ---C && dump_dmap cfv; fi
-  [ ! "$cmd" ] && error "Missing command" && echo "$hHELP_general" >&2 && exit_err
+  [ ! "$cmd" ] && error "Missing command" && echo "$hHELP_general" >&2 && exit_err - "$cERR_CMD"
   complete_ulc cmd function cmd_ v && cmd="${cmd:4}" || exit_inperr "$v command '$cmd'" # expand incomplete cmd
   # modify to `help $cmd' when -h/--help is given after the cmd
   for v in "$@"; do case $v in -h|--help) set -- "$cmd"; cmd=help; break;; esac; done
@@ -667,10 +693,10 @@ proc_args (){ local -A cfv; local os cmd v
   esac
   if [ "$cfCFG" ]; then
     [ -d "$cfCFG" ] && cfCFG+="/${aMYNAME}.yaml" # default completion for convenience
-    ! chk_yq && exit_err
+    ! chk_yq && exit_err - "$cERR_REQ"
     if ! cf_load; then error "Configuration failed!"
       [ "$cmd" = "dumpcfg" ] && cmd_dumpcfg "${@:1:${#}-1}"
-      exit_err
+      exit_err - "$cERR_CFG"
     fi
     _set_opts      # again, as possibly overwritten
     [ "$cfUMASK" ] && chk_varclass "$cfUMASK" noct && umask "$cfUMASK" && xvmsg C "umask set to $cfUMASK" # non-default umask
@@ -701,9 +727,9 @@ complete_ulc (){ local -n cv_=$1; local -a ia
 exit_getopterrs (){ local -a ia; local l
   readarray -t ia <<<"$1"
   for l in "${ia[@]}"; do [[ "$l" = ":"* ]] && error "Input$l"; done
-  exit_err "Failed to process input"
+  exit_err "Failed to process input" "$cERR_CMD"
 }
-exit_inperr (){ error "Input: $1"; exit_err "Failed to process input"; }
+exit_inperr (){ error "Input: $1"; exit_err "Failed to process input" "$cERR_CMD"; }
 
 ##############################################################################
 # %Output
@@ -972,11 +998,21 @@ cf_getscheds (){ local l
   while read -r l; do [ "$l" ] && aJQIA[$l|schedule]=1; done < <(cfq - schednames "*" "$cYP_JCFLT")
 }
 
-chk_conffile (){ [ "$cfCFGFN" ] || exit_err "Cfg file required for $aCMDNAME!"; cf_getscheds; }
+chk_conffile (){ [ "$cfCFGFN" ] || exit_err "Cfg file required for $aCMDNAME!" "$cERR_CMD"; cf_getscheds; }
 # Check if file $1 may be dumped to
 chk_dumpfile (){ local t; [ ! "${1:0:1}" = "~" ] && t=$(realpath "$1" 2>/dev/null) && [ ! -d "$t" ]; }
 # Check if owner=root && o-* for file $1
 chk_fileperms (){ local t; t=$(stat --printf='%u|%a' "$1" 2>/dev/null) && ((${t%%|*} + (0${t##*|} & 7) == 0)); }
+# Check if running as root, opt. overriding generic errmsg with $1
+<<<<<<< HEAD
+<<<<<<< HEAD
+chk_root (){ ((EUID)) && exit_err "${1:-Must be root for this!}" "$cERR_PRV" || : ; }
+=======
+chk_root (){ ((EUID)) && exit_err "${1:-Must be root for this!}" "$cERR_PRIV" || : ; }
+>>>>>>> 55c9629 (add own exit code for missing privileges (2), reworked with new chk_root())
+=======
+chk_root (){ ((EUID)) && exit_err "${1:-Must be root for this!}" "$cERR_PRV" || : ; }
+>>>>>>> 57a7733 (chg/add cERR_*)
 # Check if the path $1 looks safe to use, $2="notmp" to exclude /tmp & tmpfs
 chk_safepath (){ local p=${1%%+(/)} t; local bda=(/bin/ /boot/ /dev/ /etc/ /lib/ /proc/ /run/ /sbin/ /sys/ /usr/)
   [[ "$p" = "/"* ]]            || return 1
@@ -1009,12 +1045,12 @@ chk_varclass (){ local t=${cVCHK_DEFS[$2]}; [ "$t" ] || return 0
 }
 # Check if statedir and mountdir can be used
 chk_workdirs (){
-  [ "$cfSTATEDIR" ]                        || exit_err "No statedir configured!"
-  chk_safepath "$cfSTATEDIR" notmp         || exit_err "Cannot use '$cfSTATEDIR' as statedir!"
+  [ "$cfSTATEDIR" ]                        || exit_err "No statedir configured!" "$cERR_CFG"
+  chk_safepath "$cfSTATEDIR" notmp         || exit_err "Cannot use '$cfSTATEDIR' as statedir!" "$cERR_CFG"
   if [ "$cfMOUNTDIR" ]; then
     [[ ! "$cfMOUNTDIR" = "$cfSTATEDIR"* ]] && \
-    [[ ! "$cfSTATEDIR" = "$cfMOUNTDIR"* ]] || exit_err "statedir and mountdir must be separate!"
-    chk_safepath "$cfMOUNTDIR"             || exit_err "Cannot use '$cfMOUNTDIR' as mountdir!"
+    [[ ! "$cfSTATEDIR" = "$cfMOUNTDIR"* ]] || exit_err "statedir and mountdir must be separate!" "$cERR_CFG"
+    chk_safepath "$cfMOUNTDIR"             || exit_err "Cannot use '$cfMOUNTDIR' as mountdir!" "$cERR_CFG"
     mkdir -p "$cfMOUNTDIR" &>/dev/null     || exit_err "Could not assure mountdir!"
   fi
   mkdir -p "$cfSTATEDIR/jlast" &>/dev/null || exit_err "Could not assure statedir!"
@@ -1116,7 +1152,7 @@ chk_pre (){ local -i r=0
   ! dowehave "$cfBIN_BORG" && ! dowehave "$cfBIN_SNAPPER" && error "Neither borg nor snapper found or enabled!" && r=1
   chk_borg      || r=1
   chk_oncal     || r=1
-  ((r)) && exit_err "Essential prerequisite(s) missing!"
+  ((r)) && exit_err "Essential prerequisite(s) missing!" "$cERR_REQ" || :
 }
 
 # Get all path->cfgname mappings from snapper into (new/cleared) result hash $1
@@ -1262,11 +1298,11 @@ on_signal (){ local -a cpa; local aMSGPRE # hide any existing msg prefix!
   trap - INT TERM HUP; kill -"$1" $$ "${cpa[@]}" 2>/dev/null
 }
 
-# Exit with optional errmsg $1
+# Exit with optional errmsg $1 and alt. status $2
 exit_err (){
-  [ "$1" ] && error "$1"
+  [ "$1" ] && [ ! "$1" = "-" ] && error "$1"
   [ "${cfSUM_INFO[exit_reason]}" ] || xSUM_INFO[exit_reason]="ERR"
-  exit 1
+  exit "${2:-1}"
 }
 
 ##############################################################################
@@ -1290,13 +1326,13 @@ chk_pidlock (){ local -i i; local p pfd="/run/$aMYNAME"; local pfn="$pfd/${aMYNA
   }
   _set_pidlock (){ _chk_pidlock && mkdir -p "$pfd" && ln -fns $$ "$pfn" 2>/dev/null && p=$$; }
   case "${1^^}" in
-     S) ((EUID)) && exit_err "$cMSG_EROOT"
+     S) chk_root
         if ! _set_pidlock; then
           ((cfPIDLOCK_MAXWAITS)) && info "PID locked, retrying for max. ${cfPIDLOCK_MAXWAITS}s"
           for ((i=cfPIDLOCK_MAXWAITS; i>0 && p != $$; i--)); do snore 1; _set_pidlock && break; done
         fi
         if ((p != $$)); then
-          ((cfPIDLOCK_SURRENDER)) && { info "PID locked"; exit 0; } || exit_err "PID locked"
+          ((cfPIDLOCK_SURRENDER)) && { info "PID locked"; exit 0; } || exit_err "PID locked" "$cERR_PIDLOCK"
         fi
         ;;
      C) _chk_pidlock && rm -f "$pfn" 2>/dev/null;;
@@ -1308,7 +1344,7 @@ clr_pidlock (){ chk_pidlock C; }
 
 # Init/clear the IPC subdir, use only AFTER ensuring a pidlock
 init_ipc (){
-  ((EUID)) && exit_err "$cMSG_EROOT"  # just to be sure
+  chk_root  # just to be sure
   xIPCDIR="/run/$aMYNAME/ipc"
   [ -d "$xIPCDIR" ] && rm -rf "$xIPCDIR" 2>/dev/null        # assure we got a clean (and properly umasked) one!
   (umask 077; mkdir -p "$xIPCDIR" 2>/dev/null) || return 1  # priv. umask!
@@ -2961,8 +2997,7 @@ cmd__precheck (){ local -i r=0
   msg_setlev info
   info "Checking prerequisites.."
   chk_pre  # will not return on failure
-  ((r)) || info "No problems found."
-  exit "$r"
+  info "No problems found."
 }
 # Non-public "_status", for cmd_show status
 cmd__status (){ local -A ra sa ta; local -a dja qlfa ia; local -i r sc sd sq; local cd nd l m
@@ -3068,22 +3103,21 @@ cmd_help (){ local cp helpv="$1"
   exit 1
 }
 cmd_dumpcfg (){
-  ((EUID)) && exit_err "$cMSG_EROOT"
+  chk_root
   [ "${FUNCNAME[1]}" = "main" ] && chk_conffile  # special for dumping bad cfg from proc_args
   chk_unclean W
   (($# > 1)) && exit_inperr "Only one file name argument allowed!"
   #[ ! "$1" ] && echo "---" && echo "$aCFGCACHE" && exit 0
   if [ ! "$1" ] || [ "$1" = '-' ]; then echo '---'; echo "$aCFGCACHE"; return 0; fi
   cd "$xIWD" &>/dev/null  # $1 may be rel. to initial dir, so make sure to be there
-  chk_dumpfile "$1"                   || exit_err "Bad dump file name: $1"
+  chk_dumpfile "$1"                   || exit_err "Bad dump file name: $1" "$cERR_CMD"
   echo "$aCFGCACHE" >"$1" 2>/dev/null || exit_err "Error dumping to $1"
   info "Preprocesed cfg dumped to $(realpath "$1")"
 }
 cmd_qlist (){ local -a jla fja fna; local -i f i j r=0; local spc cn fn ln qn t
   [ "$cfSTATEDIR" ] || return 1 # just to be sure
   msg_setlev info
-  chk_conffile
-  chk_unclean
+  chk_conffile; chk_unclean
   cn="$1"; shift
   case $cn in sh*|l*) cn="show";; c*) cn="clear";; se*) cn="set";; a*) cn="add";; su*) cn="sub";;
               "") cmd_help qlist; return 1;;
@@ -3148,7 +3182,7 @@ cmd_reset (){ local k t
   case $1 in
       --all) shift
              t="$*"; [ "$t" ] || t="$cfDF_RESET_TIME"
-             date -d "$t" &>/dev/null || exit_err "Bad date/time specifier: '$t'"
+             date -d "$t" &>/dev/null || exit_err "Bad date/time specifier: '$t'" "$cERR_CMD"
              if ((${#cfSTATEDIR} > 5)); then # Extra check, then delete per dir
                rm -f "$cfSTATEDIR"/*        &>/dev/null    # std. state files
                rm -f "$cfSTATEDIR"/jlast/*  &>/dev/null    # per_job lastruns
@@ -3181,7 +3215,7 @@ cmd_run (){ local -a args; local os q t
     shift; while (($#)); do case $1 in --);; --at)shift;; *)xRUNARGS+=("$1");; esac; shift; done
   }
   chk_conffile
-  ((EUID)) && exit_err "Must be root to process jobs!" # early check, as pidlock stuff needs to be later
+  chk_root "Must be root to process jobs!" # early check, as pidlock stuff needs to be later
   if ! os=$(getopt -n "" \
     -o n \
     -l dryrun,at:,nocreate,noprune \
@@ -3257,18 +3291,14 @@ cmd_run (){ local -a args; local os q t
   (($? == cERR_BACKLOG)) && return $cERR_BACKLOG || :
 }
 cmd_settimer (){
-  ((EUID)) && exit_err "$cMSG_EROOT!"
-  chk_conffile
-  aSHOW_RUN_TIME=1
-  chk_unclean
+  chk_root; chk_conffile; aSHOW_RUN_TIME=1; chk_unclean
   (($#)) && warn "Input: extra argument(s) ignored: '$*'"
   sysd_upd_dropin STANDALONE
 }
 cmd_show (){ local -A aa; local -a ia ja; local buf e j l s t spca spcb
   local -A prior=([cfOUTPUT_VERBOSITY]="$cfOUTPUT_VERBOSITY" [cfOUTPUT_OPTIONS]="$cfOUTPUT_OPTIONS")
   msg_setlev info; cfOUTPUT_OPTIONS=""
-  chk_conffile
-  chk_unclean
+  chk_conffile; chk_unclean
   case $1 in
     # colors
     col*) info "Colors Overview"
@@ -3359,7 +3389,7 @@ cmd_show (){ local -A aa; local -a ia ja; local buf e j l s t spca spcb
     # notification
     not*) unset "cfNOTIFY_NOTTYMUTE" # we never want this when testing notifications!
           [ ! "$cfNOTIFY_DBUS_USER" ] && [ ! "$cfNOTIFY_DBUS_ADDR" ] && [ ! "$cfNOTIFY_CUSTOM_COMMAND" ] && \
-            exit_err "No notification means configured!"
+            exit_err "No notification means configured!" "$cERR_CFG"
           if [ "$2" ];
             then info "Sending notification"; notify log "$2" "$3" "exit_reason: FIN\nerrors: 0\nwarnings: 0\n"
             else info "Sending default test notification"
@@ -3379,7 +3409,7 @@ Time to get prepared for <b>meeting</b> intelligent beings, <b>not for scaring t
     # status
     st*)  shift; cmd__status "$@"; return;;
     # service
-    se*)  ((!envSYSD)) && exit_err "This needs systemd!"
+    se*)  ((!envSYSD)) && exit_err "This needs systemd!" "$cERR_REQ"
           sysd_get_service aa "$2" || exit_err "Could not get service data"
           info "Overview for ${aa[Id]}"
           t="${aa[FragmentPath]}"
@@ -3388,7 +3418,7 @@ Time to get prepared for <b>meeting</b> intelligent beings, <b>not for scaring t
           printf '\n\t%s\n' "🢃 Status Info"  && dump_dmap aa
           ;;
     # timer
-    t*)   ((!envSYSD)) && exit_err "This needs systemd!"
+    t*)   ((!envSYSD)) && exit_err "This needs systemd!" "$cERR_REQ"
           sysd_get_timer aa "$2" || exit_err "Could not get timer data"
           info "Overview for ${aa[Id]}"
           t="${aa[FragmentPath]}"
