@@ -96,36 +96,14 @@ cDF_NAME_GLOB="{NODE}-*"
 cDF_NAME_IDENT="{TSYN}"
 cDF_TASK_ORDER="prune,*"
 cDF_TIME_FMT="+%FT%T"
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 57a7733 (chg/add cERR_*)
 cERR_GEN=1                # gen error exit code
 cERR_CMD=2                # cmd prob / bad input
 cERR_PRV=3                # missing privs for cmd
 cERR_REQ=4                # missing system reqs
 cERR_CFG=5                # cfg prob
-<<<<<<< HEAD
-<<<<<<< HEAD
 cERR_PIDLOCK=14           # could not get pidlock
 cERR_NORUN=15             # norun sem found set
 cERR_BACKLOG=16           # exited with uncompleted jobs
-=======
-cERR_GEN=1                # exit codes
-cERR_PRIV=2
-cERR_CFG=3
-cERR_PIDLOCK=14
-cERR_NORUN=15
-cERR_BACKLOG=16
->>>>>>> a40766f (add cERR_PIDLOCK)
-=======
-cERR_PIDLOCK=14           # could not get pislock
-=======
-cERR_PIDLOCK=14           # could not get pidlock
->>>>>>> 387e71d (chg/add exit codes again)
-cERR_NORUN=15             # norun sem found set
-cERR_BACKLOG=16           # exited with uncompleted jobs
->>>>>>> 57a7733 (chg/add cERR_*)
 cMAXLOGOPTS="ACSJLNPQT??" # for --debug
 cSNOOZE_RPT_SECS=60
 cSNOOZE_CHK_SECS=10
@@ -1004,15 +982,7 @@ chk_dumpfile (){ local t; [ ! "${1:0:1}" = "~" ] && t=$(realpath "$1" 2>/dev/nul
 # Check if owner=root && o-* for file $1
 chk_fileperms (){ local t; t=$(stat --printf='%u|%a' "$1" 2>/dev/null) && ((${t%%|*} + (0${t##*|} & 7) == 0)); }
 # Check if running as root, opt. overriding generic errmsg with $1
-<<<<<<< HEAD
-<<<<<<< HEAD
 chk_root (){ ((EUID)) && exit_err "${1:-Must be root for this!}" "$cERR_PRV" || : ; }
-=======
-chk_root (){ ((EUID)) && exit_err "${1:-Must be root for this!}" "$cERR_PRIV" || : ; }
->>>>>>> 55c9629 (add own exit code for missing privileges (2), reworked with new chk_root())
-=======
-chk_root (){ ((EUID)) && exit_err "${1:-Must be root for this!}" "$cERR_PRV" || : ; }
->>>>>>> 57a7733 (chg/add cERR_*)
 # Check if the path $1 looks safe to use, $2="notmp" to exclude /tmp & tmpfs
 chk_safepath (){ local p=${1%%+(/)} t; local bda=(/bin/ /boot/ /dev/ /etc/ /lib/ /proc/ /run/ /sbin/ /sys/ /usr/)
   [[ "$p" = "/"* ]]            || return 1
