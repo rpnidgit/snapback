@@ -6,10 +6,8 @@
 It will be bumped to 1.0.0, and proper [Semantic Versioning](https://semver.org/spec/v2.0.0.html) used thereafter,
 once wider feedback got digested and any significant "environmental myopia" based flaws resolved.
 
-## Unreleased
-
-Nothing yet.
-
+<!--
+## VERSION
 ### Added
 ### Changed
 ### Depracated
@@ -17,8 +15,14 @@ Nothing yet.
 ### Fixed
 ### Security
 ### Contributors
+-->
 
----
+## Unreleased
+- Nothing yet.
+
+
+
+
 
 ## 0.95.1
 
@@ -36,6 +40,5 @@ Blimey: these are atm crafted for single entries only. Not an essential quirk, a
 
 
 ## 0.95.0
-
 - First public release.
 
