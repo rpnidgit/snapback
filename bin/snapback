@@ -43,7 +43,7 @@
 # ============================================================================
 declare -r cMYNAME="snapback"
 declare -r cMYTASK="Snapshot & Backup Tool"
-declare -r cMYVERSION="0.95.0"
+declare -r cMYVERSION="0.95.1"
 declare -r cMYCOPR="© 2024-2025 R.Pradella"
 # ============================================================================
 # Normalize things right away that save us some later hassles:

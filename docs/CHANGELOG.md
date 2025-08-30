@@ -8,10 +8,31 @@ once wider feedback got digested and any significant "environmental myopia" base
 
 ## Unreleased
 
+Nothing yet.
+
+### Added
 ### Changed
-- exit status handling: now giving more specific codes for some general cases.
-- some job attrib checks: general cosmetics & prepping for improving `archive.create.*pattern` config matters.  
-Blimey: these are atm only crafted for single entries. Not essential, as `*patternfile` is there and common - but clearly to be improved.
+### Depracated
+### Removed
+### Fixed
+### Security
+### Contributors
+
+---
+
+## 0.95.1
+
+### Added
+- New "X" *xverb* flag for extra outputs not fitting into other categories.
+- Some more extra/debugging outputs.
+
+### Changed
+- Exit status codes: now giving more specific ones for some general cases.
+- Job attribute checks: general cosmetics & prepping for improving `archive.create.*pattern` config matters.  
+Blimey: these are atm crafted for single entries only. Not an essential quirk, as `*patternfile` is there and more common for multiple ones - but clearly deserving improvement.
+
+### Fixed
+- **SEVERE**: PID locks were effectively deactivated after a recent (pre-pub) change.
 
 
 ## 0.95.0
