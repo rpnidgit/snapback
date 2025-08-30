@@ -90,24 +90,24 @@ cfSTATEDIR=""                     # NOT to be passed per env!
 cfALLOW_CUSTHOOKS=1
 #-----------------------------------------------------------------------------
 # Other global settings
-cBORG_VNRANGE="124-209"  # supported ones
+cBORG_VNRANGE="124-209"     # supported ones
 cDF_NAME="{NODE}"
 cDF_NAME_GLOB="{NODE}-*"
 cDF_NAME_IDENT="{TSYN}"
 cDF_TASK_ORDER="prune,*"
 cDF_TIME_FMT="+%FT%T"
-cERR_GEN=1                # gen error exit code
-cERR_CMD=2                # cmd prob / bad input
-cERR_PRV=3                # missing privs for cmd
-cERR_REQ=4                # missing system reqs
-cERR_CFG=5                # cfg prob
-cERR_PIDLOCK=14           # could not get pidlock
-cERR_NORUN=15             # norun sem found set
-cERR_BACKLOG=16           # exited with uncompleted jobs
-cMAXLOGOPTS="ACSJLNPQT??" # for --debug
+cERR_GEN=1                  # gen error exit code
+cERR_CMD=2                  # cmd prob / bad input
+cERR_PRV=3                  # missing privs for cmd
+cERR_REQ=4                  # missing system reqs
+cERR_CFG=5                  # cfg prob
+cERR_PIDLOCK=14             # could not get pidlock
+cERR_NORUN=15               # norun sem found set
+cERR_BACKLOG=16             # exited with uncompleted jobs
+cMAXLOGOPTS="ACSJLNPQTX??"  # for --debug
 cSNOOZE_RPT_SECS=60
 cSNOOZE_CHK_SECS=10
-cSUMRES=1                 # register msgs for summary
+cSUMRES=1                   # register msgs for summary
 cUMOUNT_MAXLOOPS=3
 # Predefined color definitions
 declare -A cCCF_B3=(    # 3b linux std base color stuff
@@ -597,7 +597,7 @@ A  : Archiving                      C  : Configuration
 J  : Jobs                           L  : Lists
 N  : Node infos                     P  : Pruning
 Q  : Job Queuing & Selection        S  : Snapshing
-T  : (Systemd) Timer related infos
+T  : (Systemd) Timer related infos  X  : Uncategorized/Other
 ?  : Adds caller/lineno. info to the output
 ?? : Displays the full call chain
 +  : Enables all
@@ -1182,8 +1182,9 @@ chk_snooze (){ local -i lrt st; local sfn="$cfSTATEDIR/_.snooze" tfn="$cfSTATEDI
 # running as root (and exclusively) AND $1 != W
 # Call for cleanup BEFORE setting an own one!
 chk_unclean (){
-  chk_pidlock               || return 0   # no action if another instance is running
-  [ -f "$cfSTATEDIR/.cln" ] || return 0   # no semaphore
+  xvmsg X "Checking for unclean exit"
+  chk_pidlock               || { xvmsg X "Looks clean: another instance running"; return 0; }
+  [ -f "$cfSTATEDIR/.cln" ] || { xvmsg X "Looks clean"; return 0; }
   warn "Prior unclean exit detected"
   { ((EUID)) || [ "${1^^}" = "W" ]; } && warn "Run '$aMYNAME reset --stale' soon!" && return 1
   info "Performing late cleanup"
@@ -1257,7 +1258,7 @@ on_exit (){ local -i c r; local f t # localize to have clean vars
   else ((xSUM_INFO[warnings]))  && warn  "Finished with $((xSUM_INFO[warnings])) warning(s)"
   fi
   ((aSHOW_RUN_TIME)) && timer_time GLOBAL t && info "Finished after ${t}s"
-  ((aCOMPET)) || clr_pidlock
+  clr_pidlock # clears only own and stale ones!
   :
 }
 # Sigtrap to log interruptions and reg for summing
@@ -1284,29 +1285,44 @@ exit_err (){
 # Note a set lock is NOT added to xTMPFILES for automated deletion as we have to acquire short lived ones as well
 chk_pidlock (){ local -i i; local p pfd="/run/$aMYNAME"; local pfn="$pfd/${aMYNAME}.pid"
   _chk_pidlock (){
+    xvmsg X "Checking for existing PID lock"
     aCOMPET=0
-    if [ -L "$pfn" ] || [ -f "$pfn" ]; then
-      if p=$(realpath "$pfn" 2>/dev/null) && p="${p##*/}" && [ "$p" = "${p//[!0-9]}" ] && [ "$(ps -o comm --no-headers -p "$p" 2>/dev/null)" = "$aMYNAME" ];
-      then [ "$p" = "$$" ] && return 0 || { aCOMPET=1; return 1; }
+    if [ -L "$pfn" ] || [ -f "$pfn" ];
+    then if p=$(realpath "$pfn" 2>/dev/null) && p="${p##*/}" && [ "$p" = "${p//[!0-9]}" ] && [ -d "/proc/$p" ];
+      then if [ "$p" = "$$" ];
+        then xvmsg X "⮡ locked by myself";         return 0
+        else xvmsg X "⮡ locked by #$p"; aCOMPET=1; return 1
+        fi
       fi
+      xvmsg X "⮡ found stale lock, clearing"
       p=0                       # overwrite curr value with a safe integer
       rm -f "$pfn" 2>/dev/null  # quietly try to rm stale/bad ones, ok to fail when not root
+    else xvmsg X "⮡ not locked"
     fi
     :
   }
   _set_pidlock (){ _chk_pidlock && mkdir -p "$pfd" && ln -fns $$ "$pfn" 2>/dev/null && p=$$; }
   case "${1^^}" in
-     S) chk_root
+     S) xvmsg X "PID Lock: Set demanded"
+        chk_root
         if ! _set_pidlock; then
-          ((cfPIDLOCK_MAXWAITS)) && info "PID locked, retrying for max. ${cfPIDLOCK_MAXWAITS}s"
+          ((cfPIDLOCK_MAXWAITS)) && info "Found PID-locked, retrying for max. ${cfPIDLOCK_MAXWAITS}s"
           for ((i=cfPIDLOCK_MAXWAITS; i>0 && p != $$; i--)); do snore 1; _set_pidlock && break; done
         fi
         if ((p != $$)); then
-          ((cfPIDLOCK_SURRENDER)) && { info "PID locked"; exit 0; } || exit_err "PID locked" "$cERR_PIDLOCK"
+          ((cfPIDLOCK_SURRENDER)) && { info "Could not PID-lock"; exit 0; } || exit_err "Could not PID-lock" "$cERR_PIDLOCK"
         fi
+        xvmsg X "⮡ now locked by me"; :
         ;;
-     C) _chk_pidlock && rm -f "$pfn" 2>/dev/null;;
-     *) _chk_pidlock;;
+     C) xvmsg X "PID Lock: Clear demanded"
+        if _chk_pidlock && ((p == $$));
+        then xvmsg X "⮡ clearing own lock"; rm -f "$pfn" 2>/dev/null
+        else xvmsg X "⮡ nothing for me to clear"
+        fi
+        :
+     ;;
+     *) xvmsg X "PID Lock: Check demanded"
+        _chk_pidlock;;
   esac
 }
 set_pidlock (){ chk_pidlock S; }
