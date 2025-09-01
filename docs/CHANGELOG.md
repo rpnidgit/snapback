@@ -27,7 +27,7 @@ once wider feedback got digested and any significant "environmental myopia" base
 ## 0.95.1
 
 ### Added
-- New "X" *xverb* flag for extra outputs not fitting into other categories.
+- New `X` *xverb* flag for extra outputs not fitting into other categories.
 - Some more extra/debugging outputs.
 
 ### Changed

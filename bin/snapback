@@ -1254,11 +1254,11 @@ on_exit (){ local -i c r; local f t # localize to have clean vars
   ((c + r)) && warn "Exiting with cleanup problems"
   ((c))     && warn "Try correcting with '$aMYNAME reset --stale'"
   sum_notify
+  clr_pidlock # clears only own and stale ones!
   if   ((xSUM_INFO[errors])); then error "Finished with $((xSUM_INFO[errors])) error(s), $((xSUM_INFO[warnings])) warning(s)"
   else ((xSUM_INFO[warnings]))  && warn  "Finished with $((xSUM_INFO[warnings])) warning(s)"
   fi
   ((aSHOW_RUN_TIME)) && timer_time GLOBAL t && info "Finished after ${t}s"
-  clr_pidlock # clears only own and stale ones!
   :
 }
 # Sigtrap to log interruptions and reg for summing
