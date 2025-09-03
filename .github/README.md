@@ -2,8 +2,8 @@
 <h1 align="center"><em>SnapBack</em></h1>
 <p align="center">
 A versatile, flexibly configurable wrapper & automation tool for<br/>
-<a href="https://www.borgbackup.org/">Borg Backup</a> &
-<a href="https://github.com/openSUSE/snapper">Snapper</a>
+<a href="https://www.borgbackup.org/"><em>BorgBackup</em></a> &
+<a href="https://github.com/openSUSE/snapper"><em>Snapper</em></a>
 </p>
 <br/>
 
@@ -11,8 +11,8 @@ A versatile, flexibly configurable wrapper & automation tool for<br/>
 - Unified job concept for both archiving and (btrfs) snapshot purposes
 - Archiving from paths, own (transient or persistent), or existing btrfs snapshots
 - Archiving with configurable path prefixes
-- Supporting multiple repositories, and mixed `borg` versions
-- More flexible snapshotting than with common `snapper` automations
+- Supporting multiple repositories, and mixed *BorgBackup* versions
+- More flexible snapshotting than with common *Snapper* automations
 - Adjustable pruning/cleanup logic for archives & snapshots
 - Simple job scheduling using *[OnCalendar](https://www.freedesktop.org/software/systemd/man/252/systemd.time.html)* event specification format
 - Versatile individual job selection, for immediate, undefined, or timed (`at`-alike) processing
@@ -37,9 +37,9 @@ A versatile, flexibly configurable wrapper & automation tool for<br/>
   - `systemd-analyze` &nbsp;&nbsp;<sub><sup><code>◀systemd</code></sup></sub>
   - **or** a compatible replacement for its `calendar` command
 - *for archiving*:
-  - [`borg`](https://www.borgbackup.org/) v1.2.4 or later, 1.2.6+ recommended, [see notes](#borg-v2-notes) for v2
+  - [*BorgBackup*](https://www.borgbackup.org/) v1.2.4 or later, 1.2.6+ recommended, [see notes](#borgbackup-v2-notes) for v2
 - *for snapshots:*
-  - [`snapper`](https://github.com/openSUSE/snapper)
+  - [*Snapper*](https://github.com/openSUSE/snapper)
   - recommended: `btrfs` utility &nbsp;&nbsp;<sub><sup><code>◀deb:btrfs-progs</code></sup></sub>
 - *for desktop notifications:*
   - D-Bus environment
@@ -53,12 +53,12 @@ you need to find a compatible replacement for `systemd-analyze calendar`.
 ## Downsides
 - **Needs root privileges** for meaningful operation.
 - Does **not** come with a GUI, but requires you to properly configure what you want it to do, using YAML.
-- Supports archiving **only** with `borg`.
-- Supports snapshotting **only** with `btrfs` filesystems, and **only** in `snapper` fashion.
-- Does **not** handle all `snapper` features, like pre/post snapshots, and is **not** planned to ever do so.
-- Does **not** give any help mangling with `snapper` configurations.
+- Supports archiving **only** with *BorgBackup*.
+- Supports snapshotting **only** with *BTRFS* filesystems, and **only** in *Snapper* fashion.
+- Does **not** handle all *Snapper* features, like pre/post snapshots, and is **not** planned to ever do so.
+- Does **not** give any help mangling with *Snapper* configurations.
 - Facilitates **only** *creation & maintenance* of snapshots & backups, and does **not** by itself help with *restoring* from or doing other things with them.
-- **Requires** repositories to exist *ready for use*, and does **not** help with any repo maintenance beyond compacting.
+- **Requires** *Borg* repositories to exist *ready for use*, and does **not** help with any repo maintenance beyond compacting.
 - Author is an aged, grumpy diva.
 
 ## [Documentation 🞂](../docs)
@@ -69,7 +69,7 @@ you need to find a compatible replacement for `systemd-analyze calendar`.
 
 ## Special Notes
 
-### `Borg` v2 Notes
+### *BorgBackup* v2 Notes
 
 >[!IMPORTANT]
 >- Support for the upcoming v2 is currently still **EXPERIMENTAL**.
@@ -79,6 +79,6 @@ The good news, as far as *SnapBack* is concerned: ***Don't Panic!***
 
 - It (hopefully) handles most things automatically, dep. on the used client's version.
 - Archive names for v2 repos are clearly recommended to be configured in "new" (and simpler) fashion, but it also accepts
-the "classic" v1 way w/o making `borg` unhappy.
-- No need to migrate everything in one run: repos may be *version tagged* for selecting from multiple `borg` executables.
+the "classic" v1 way w/o making *Borg* unhappy.
+- No need to migrate everything in one run: repos may be *version tagged* for selecting from different *Borg* executables.
 

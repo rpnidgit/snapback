@@ -12,10 +12,10 @@ A minimal initial configuration,
 
 #### `*.borgexcl`:
 
-Some example exclusion pattern files for `borg`.
+Some example exclusion pattern files for *Borg*.
 
 Note that exclusion patterns do impact archiving performance, and e.g. for the linux system root, they can often be **completely** avoided by
-- telling `borg` to stay in the same file system (*SnapBack* default), and
+- telling *Borg* to stay in the same file system (*SnapBack* default), and
 - using directory *tagfiles* to exclude any remaining ones.
 
 For user homes they are difficult to avoid, as most of the discardable data is typically at locations deep inside a quite dynamic tree, and
