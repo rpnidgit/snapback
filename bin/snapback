@@ -2777,6 +2777,10 @@ _jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
     done
     :
   }
+  # Add args from scalar or sequence attrib $1 as individual $2 option(s)
+  _araseq (){ local -i i=-1; local t="${ja_[$1]}"
+    while :; do [ "$t" ] && args+=("$2" "$t"); t="${ja_[${1}_$((++i))]}"; [ "$t" ] || return 0; done
+  }
   # Run borg incl. bind mount wrapping & prefixing stuff
   # 1:node, 2:snapshot num (0-alike for classic path), 3+ extra args (not in $args & w/o archive name & path)
   _arwrap (){ local a=$(_jcprepl "${ja_[_ac_name]}") adir mp t; local -i r=0
@@ -2803,7 +2807,7 @@ _jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
   ((ja_[create_numids]))                && args+=(--numeric-ids)
   [ "${ja_[create_cachemode]}" ]        && args+=(--files-cache "${ja_[create_cachemode]}")
   [ "${ja_[create_compression]}" ]      && args+=(-C "${ja_[create_compression]}")
-  [ "${ja_[create_pattern]}" ]          && args+=(--pattern "${ja_[create_pattern]}")
+  _araseq create_pattern "--pattern"
   if t=$(chk_suppfile "${ja_[create_patternfile]}");
     then                       [ "$t" ] && args+=(--patterns-from "$t")
     else cfgerr "patternfile not found or bad: '$t'" && r=1
@@ -2811,7 +2815,7 @@ _jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
   ((ja_[create_exclude_caches]))        && args+=(--exclude-caches)
   [ "${ja_[create_exclude_tagfile]}" ]  && args+=(--exclude-if-present "${ja_[create_exclude_tagfile]}")
   ((ja_[create_exclude_tagkeep]))       && args+=(--keep-exclude-tags)
-  [ "${ja_[create_exclude_pattern]}" ]  && args+=(--exclude "${ja_[create_exclude_pattern]}")
+  _araseq create_exclude_pattern "-e"
   if t=$(chk_suppfile "${ja_[create_exclude_patternfile]}");
     then [ "$t" ]                       && args+=(--exclude-from "$t")
     else cfgerr "exclude_patternfile not found or bad: '$t'" && r=1

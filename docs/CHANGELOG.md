@@ -8,6 +8,7 @@ once wider feedback got digested and any significant "environmental myopia" base
 
 <!--
 ## VERSION
+- Nothing yet.
 ### Added
 ### Changed
 ### Depracated
@@ -18,10 +19,12 @@ once wider feedback got digested and any significant "environmental myopia" base
 -->
 
 ## Unreleased
-- Nothing yet.
+
+### Changed
+- `archive.create` config: `pattern` & `exclude.pattern` may now also be given as sequences ([#1][1]).
 
 
-
+[1]: https://codeberg.org/rpnid/snapback/issues/1
 
 
 ## 0.95.1
