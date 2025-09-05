@@ -10,7 +10,6 @@
 #    cf*      user configurable
 #    c*       constants, not meant to be user configurable
 #    a*       general internally managed helpers
-#    env*     environmental helpers
 #    t*       time related
 #    x*       special purpose, relevant to traps
 #    g*       std. globals
@@ -20,6 +19,7 @@
 # 3. Will work correctly only before April 5th, 2063 Midnight MDT
 #    due to internal, special purpose timestamp use.
 #-----------------------------------------------------------------------------
+# shellcheck disable=SC1090
 # shellcheck disable=SC2004
 # shellcheck disable=SC2015
 # shellcheck disable=SC2016
@@ -66,6 +66,7 @@ cfBIN_BORG=borg
 cfBIN_ONCAL=systemd-analyze
 cfBIN_SNAPPER=snapper
 #cfBIN_YQ=yq                      # REQUIRED to pass per env pre cmdline options
+#cfCFG=""                         # OK to pass per env pre cmdline options
 cfCFGFN=""                        # NOT to be passed per env! (cfCFG is ok!)
 cfDF_RESET_TIME=now
 cfETCDIR=""                       # NOT to be passed per env! (cfCFG is ok!)
@@ -75,9 +76,9 @@ cfNOTIFY_DBUS_FROM="$aHOSTNAME SnapBack"
 cfOUTPUT_BORG=info
 cfOUTPUT_COLORS_ENABLED=2         # 0(false,never)|1(true,always)|2(auto)
 cfOUTPUT_COLORS_MAX=0             # 0(auto)|8|16|256|$((2**24))
-#cfOUTPUT_OPTIONS=""              # MUCH ok to pass per env pre cmdline options
+#cfOUTPUT_OPTIONS=""              # OK to pass per env pre cmdline options
 cfOUTPUT_SYM_SCHED='⏲'            # symbol for scheduled queues (in "show" output)
-cfOUTPUT_VERBOSITY=info
+#cfOUTPUT_VERBOSITY=info          # OK to pass per env pre cmdline options
 cfPIDLOCK_MAXWAITS=5
 cfQUEUE_LASECS=2                  # lookahead seconds to add at queue buildup for miss prevention
 cfQUEUE_QOPTS=DE                  # D)ue E)rror N)on-due M)anual *)Any
@@ -616,6 +617,7 @@ proc_args (){ local -A cfv; local os cmd v
     case $cfOUTPUT_COLORS_MAX in 8|16|256|16777216) aTTYCOLORS="$cfOUTPUT_COLORS_MAX";; esac # forced values
     set_colors
   }
+  aVERBOSITY_NUM="" # reset in case of prior outputs
   chk_getopt || exit_err "GNU enhanced getopt required!" "$cERR_REQ"
   if ! os=$(getopt -n "" \
     -o -c:hVx:deiqvwn \
@@ -630,7 +632,7 @@ proc_args (){ local -A cfv; local os cmd v
   xARGS=("$@")  # remember for later use
   while (($#)); do
 	  case $1 in
-      -c|--cfg)       cfv[CFG]=$(realpath -e "$2" 2>/dev/null) || exit_inperr "Bad cfg source '$2'"; shift ;;
+      -c|--cfg)       cfCFG="$2"; shift ;; # NOT testing here
          --colors)    cfv[OUTPUT_COLORS_ENABLED]=1
                       case $2 in
                  8|16|256)  cfv[OUTPUT_COLORS_MAX]="$2";;
@@ -665,13 +667,14 @@ proc_args (){ local -A cfv; local os cmd v
   for v in "$@"; do case $v in -h|--help) set -- "$cmd"; cmd=help; break;; esac; done
   case $cmd in
     help|_precheck) cfNOPRECHECK=1 ;; # no std. conf search & prechecking for these!
-    *)  for v in "./$aMYNAME" "./snapback" "/etc/$aMYNAME/$aMYNAME" "/etc/snapback/$aMYNAME" "/etc/snapback/snapback"; do
-          [ ! "$cfCFG" ] && v=$(realpath -e "${v}.yaml" 2>/dev/null) && [ -f "$v" ] && cfCFG="$v" && break
+    *)  [ "$cfCFG" ] || for v in "./$aMYNAME" "./snapback" "/etc/$aMYNAME/$aMYNAME" "/etc/snapback/$aMYNAME" "/etc/snapback/snapback"; do
+          v=$(realpath -e "${v}.yaml" 2>/dev/null) && [ -f "$v" ] && cfCFG="$v" && break
         done ;;
   esac
   if [ "$cfCFG" ]; then
-    [ -d "$cfCFG" ] && cfCFG+="/${aMYNAME}.yaml" # default completion for convenience
     ! chk_yq && exit_err - "$cERR_REQ"
+    [ -d "$cfCFG" ] && cfCFG+="/${aMYNAME}.yaml" # default completion for convenience
+    v=$(realpath -e "$cfCFG" 2>/dev/null) && cfCFG="$v" || exit_inperr "Bad cfg source '$cfCFG'"
     if ! cf_load; then error "Configuration failed!"
       [ "$cmd" = "dumpcfg" ] && cmd_dumpcfg "${@:1:${#}-1}"
       exit_err - "$cERR_CFG"
@@ -883,7 +886,7 @@ notify_dbus (){ local a id un sa buf
 }
 # Build summary and send notification(s)
 sum_notify (){ local tit bdy dta t
-  ((envTTY && !cfNOTIFY_NOTTYMUTE)) && return 0
+  ((aTTY && !cfNOTIFY_NOTTYMUTE)) && return 0
   t="${xSUM_INFO[exit_reason]}"
   case $t in
     SIG*)    ((cfNOTIFY_ON_SIGNALS))    && ((${#gJPQ[@]})) &&            tit="Interrupted by $t"   ;;
@@ -999,7 +1002,9 @@ chk_safepath (){ local p=${1%%+(/)} t; local bda=(/bin/ /boot/ /dev/ /etc/ /lib/
 chk_suppfile (){ local f; [ ! "$1" ] && return 0
   if [ ! "${1:0:1}" = "/" ]; then
     [ "${1:0:1}" = "~" ] && echo "$1" && return 1
-    [ "${1:0:1}" = "." ] && set -- "$xIWD/$1" || set -- "$cfETCDIR/$1"
+    if [ "$cfETCDIR" ]; then # only when fully configured
+      [ "${1:0:1}" = "." ] && set -- "$xIWD/$1" || set -- "$cfETCDIR/$1"
+    fi
   fi
   f=$(realpath "$1" 2>/dev/null) || f="$1"
   # abusing iconv to exclude binaries as "file" wants more beef than the suppfiles may have
@@ -1138,20 +1143,23 @@ snapper_getnames (){ local -a ia; local l; aSNM=()
 # %General Processing
 
 # Initialize, process the running environment for infos and show them
-init (){ local l s t
+init (){ local l s t; aSUNIT=""
   timer_start GLOBAL
   [ "$PWD" ] && xIWD="$PWD" || xIWD=$(pwd)
-  tty -s   && envTTY=1    || envTTY=0
-  [ -t 1 ] && envTTYOUT=1 || envTTYOUT=0
-  s=$(ps --no-headers -o comm 1 2>/dev/null)
-  [[ -d /run/systemd/system ]] && [ "$s" = "systemd" ] && envSYSD=1
-  envPARENT=$(ps -p $PPID -o comm --no-headers 2>/dev/null)
-  [ "$SYSTEMD_EXEC_PID" ] && envUNIT=$(ps -p "$SYSTEMD_EXEC_PID" -o comm --no-headers 2>/dev/null)
-  t="$envPARENT"; ((envTTY)) && t+="/${TERM:-dumbtty}" || l=info
-  if [ "$envUNIT" ] || [ "$TRIGGER_UNIT" ]; then
-    t+=" "; [ "$TRIGGER_UNIT" ] && t+="${TRIGGER_UNIT}:"; t+="${envUNIT:--}"
+  tty -s   && aTTY=1    || aTTY=0
+  [ -t 1 ] && aTTYOUT=1 || aTTYOUT=0
+  s=$(ps -p 1 -o comm= 2>/dev/null)
+  [[ -d /run/systemd/system ]] && [ "$s" = "systemd" ] && aSYSTEMD=1 || aSYSTEMD=0
+  t=$(ps -p $PPID -o comm= 2>/dev/null)
+  ((aTTY)) && t+="/${TERM:-dumbtty}" || l=info
+  if ((aSYSTEMD)); then
+    s=$(ps -p $$ -o unit= 2>/dev/null)
+    [ ! "${s##*.service}" ] && [[ ! "$s" =~ ^user@[0-9]+ ]] && aSUNIT="${s%.service}"
+    if ((!aTTY)) && { [ "$aSUNIT" ] || [ "$TRIGGER_UNIT" ]; }; then
+      t+=" "; [ "$TRIGGER_UNIT" ] && t+="${TRIGGER_UNIT%.timer}:"; t+="${aSUNIT:--}"
+    fi
   fi
-  ((envTTYOUT)) || cfOUTPUT_COLORS_ENABLED=0 # may be overridden later
+  ((aTTYOUT)) || cfOUTPUT_COLORS_ENABLED=0 # may be overridden later
   set_colors
   # register traps right away
   trap  on_exit            EXIT
@@ -1371,7 +1379,7 @@ clr_bmnts (){ local t; local -i r=0
 }
 
 # get (direct) child pids into ary $1
-get_cpids (){ readarray -t "$1" < <(ps --no-headers -o pid --ppid $$); unset "$1[-1]"; [ "${!1}" ]; } # last one is ps call
+get_cpids (){ readarray -t "$1" < <(ps --ppid $$ -o pid= ); unset "$1[-1]"; [ "${!1}" ]; } # last one is ps call
 # Get curr. mounted target path for path/glob $1
 get_mnttarget (){ local -a la ma; local -i i; local t
   readarray -t ma </proc/self/mountinfo
@@ -1772,7 +1780,7 @@ oncal_eval (){ local -a ia; local -i i=-1; local buf
 # Query systemctl into hash $1 with for unit $2 and type $3 (defaulting to "service"),
 # using our predefined key arys
 sysd_query (){ local -n ra_=$1; local -a ka; local -i r; local k v l buf u="$2" t="$3"
-  { ((!envSYSD)) || ! dowehave systemctl; } && return 1
+  { ((!aSYSTEMD)) || ! dowehave systemctl; } && return 1
   if [ "${t:0:1}" = "t" ];
   then t="timer";   ka=("${cSCTL_COMKEYS[@]}" "${cSCTL_TMRKEYS[@]}")
   else t="service"; ka=("${cSCTL_COMKEYS[@]}" "${cSCTL_SVCKEYS[@]}")
@@ -1788,8 +1796,8 @@ sysd_query (){ local -n ra_=$1; local -a ka; local -i r; local k v l buf u="$2" 
   [ "${ra_[LoadState]}" = "loaded" ]
 }
 sysd_get_timer (){ local -n tra_=$1; local -a ua; local u
-  ((envTTY)) && ua=("$2" "$cfSYSTEMD_TIMER_NAME" "$aMYNAME" snapback) \
-             || ua=("$2" "$cfSYSTEMD_TIMER_NAME" "$TRIGGER_UNIT" "$envUNIT" "$aMYNAME" snapback)
+  ((aTTY)) && ua=("$2" "$cfSYSTEMD_TIMER_NAME" "$aMYNAME" snapback) \
+           || ua=("$2" "$cfSYSTEMD_TIMER_NAME" "$TRIGGER_UNIT" "$aSUNIT" "$aMYNAME" snapback)
   for u in "${ua[@]}"; do
     [ "$u" ] && sysd_query tra_ "$u" timer && [ "${tra_[Transient]}" = "no" ] && return 0
   done
@@ -1812,7 +1820,7 @@ sysd_get_dropin (){ local -A ra; local p="$cfSYSTEMD_TIMER_DROPIN"
 }
 # Update timer dropin, $1 nonempty for standalone command call
 sysd_upd_dropin (){ local -a la; local -i ci; local cs df ds dp l
-  ((!envSYSD)) && error "Timer updates require systemd!" && return 1
+  ((!aSYSTEMD)) && error "Timer updates require systemd!" && return 1
   sysd_get_dropin dp || return 1
   xvmsg T "Timer dropin: $dp"
   jobs_get_oncal la
@@ -1855,7 +1863,7 @@ OnCalendar=2063-04-05
 }
 # Suppress redundant timer triggers, incl. persistent ones
 sysd_calm_timer (){ { local s="/var/lib/systemd/timers/stamp-$TRIGGER_UNIT"
-  ((envSYSD)) && [ "$TRIGGER_UNIT" ] && dowehave systemctl; }              || return 0 # nothing to do
+  ((aSYSTEMD)) && [ "$TRIGGER_UNIT" ] && dowehave systemctl; }             || return 0 # nothing to do
   # don't calm transient ones, saving the lookup for explicitely configured ones
   [ "${TRIGGER_UNIT%.timer}" = "${cfSYSTEMD_TIMER_NAME%.timer}" ] || \
   [[ "$(systemctl show "$TRIGGER_UNIT" -p Transient 2>/dev/null)" = *no ]] || return 0
@@ -2550,7 +2558,7 @@ jqp (){
   _jqpl    (){ local -A jd; local -i s; local je js jt aMSGPRE="$aMSGPRE" aBORGVN="$aBORGVN" aBORGCMD="$aBORGCMD"
     _jqpu
     for js in "${gJPQ[@]}"; do jd=(); s=0
-      ((!envTTY && !cfDRYRUN)) && chk_snooze
+      ((!aTTY && !cfDRYRUN)) && chk_snooze
       aMSGPRE="$js"
       info "• Started"
       timer_start JOB
@@ -3217,7 +3225,7 @@ cmd_run (){ local -a args; local os q t
   while (($#)); do
 	  case $1 in
       -n|--dryrun)    cfDRYRUN=1            ;;
-      --at)           ((!envSYSD)) && error "Timed runs require systemd!" && return 1
+      --at)           ((!aSYSTEMD)) && error "Timed runs require systemd!" && return 1
                       cfTIMEDRUN=1; shift
                       _runat_prep "$1" "${xARGS[@]}" || exit_inperr "Bad date/time '$1'" ;;
       --addlast)      cfQUEUE_ADDLAST=1     ;;
@@ -3260,7 +3268,7 @@ cmd_run (){ local -a args; local os q t
     [ "$cfOUTPUT_BORG" != "debug" ] && cfOUTPUT_BORG=info
     msg_setlev info
     ((cfTIMEDRUN)) && msg "Dryrun disabled timed execution" -DRY && cfTIMEDRUN=0
-  elif ((!envTTY)); then
+  elif ((!aTTY)); then
     [ -f "$cfSTATEDIR/_.norun" ] && warn "NORUN found set, aborting" && return "$cERR_NORUN"
     chk_snooze
   fi
@@ -3399,7 +3407,7 @@ Time to get prepared for <b>meeting</b> intelligent beings, <b>not for scaring t
     # status
     st*)  shift; cmd__status "$@"; return;;
     # service
-    se*)  ((!envSYSD)) && exit_err "This needs systemd!" "$cERR_REQ"
+    se*)  ((!aSYSTEMD)) && exit_err "This needs systemd!" "$cERR_REQ"
           sysd_get_service aa "$2" || exit_err "Could not get service data"
           info "Overview for ${aa[Id]}"
           t="${aa[FragmentPath]}"
@@ -3408,7 +3416,7 @@ Time to get prepared for <b>meeting</b> intelligent beings, <b>not for scaring t
           printf '\n\t%s\n' "🢃 Status Info"  && dump_dmap aa
           ;;
     # timer
-    t*)   ((!envSYSD)) && exit_err "This needs systemd!" "$cERR_REQ"
+    t*)   ((!aSYSTEMD)) && exit_err "This needs systemd!" "$cERR_REQ"
           sysd_get_timer aa "$2" || exit_err "Could not get timer data"
           info "Overview for ${aa[Id]}"
           t="${aa[FragmentPath]}"
@@ -3427,6 +3435,7 @@ Time to get prepared for <b>meeting</b> intelligent beings, <b>not for scaring t
   echo
 }
 
+#FIXME
 # DEV/DEBUG HELPER STUB
 cmd_test (){ local -a args=("$@")
   info "🢃 Args:" && dump_ary args

@@ -22,6 +22,13 @@ once wider feedback got digested and any significant "environmental myopia" base
 
 ### Changed
 - `archive.create` config: `pattern` & `exclude.pattern` may now also be given as sequences ([#1][1]).
+- Invocation info line: unit infos are now suppressed for tty sessions, and
+  - ignoring non-service/timer and `user@UID.service` units,
+  - suffix-stripped.
+
+### Fixed
+- `cfCFG` was not properly normalized & checked when given per the environment.
+- Invocation info line did not give the correct unit name.
 
 
 [1]: https://codeberg.org/rpnid/snapback/issues/1
