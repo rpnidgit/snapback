@@ -85,8 +85,9 @@ cfQUEUE_QOPTS=DE                  # D)ue E)rror N)on-due M)anual *)Any
 cfSNAPSHOT_LOCK_PREFIX="BSY_"
 cfSNAPSHOT_TEMP_PREFIX="TMP_"
 cfSTATEDIR=""                     # NOT to be passed per env!
+#cfGURUMODS=""                     # ONLY per env: opt. dev/debug code file, SOURCED pre init
 
-#cfGURU_NO_WARN_WILD_KEY=0         # Warn if a key was found that got only enabled by '*'
+#cfGURU_WARN_WILD_KEY=1           # Warn if a key was found that got only enabled by '*'
 #cfGURU_ALLOW_ANY_KEY=0
 cfALLOW_CUSTHOOKS=1
 #-----------------------------------------------------------------------------
@@ -160,7 +161,6 @@ declare -ra cVFLT_GLOBAL=( # no general wildcarding nor custom stuff here!
   archive_df_prefix:arcpref
   'bin_*:path'
   df_reset_time:gnudate
-  'guru_*'
   noprecheck:bool
   notify_nottymute:bool 'notify_on_*:bool' notify_custom_command notify_dbus_user:posix notify_dbus_addr:path
   'notify_*_from:noquote' notify_dbus_category:alpha notify_dbus_expire:nint notify_dbus_icon:path notify_dbus_urgency:ntfyurg
@@ -172,6 +172,7 @@ declare -ra cVFLT_GLOBAL=( # no general wildcarding nor custom stuff here!
   'snapshot_*:posix'
   'systemd_timer_*:posix' 'systemd_*:bool'
   umask:noct
+  'guru_*'
   )
 declare -ra cVFLT_JOBS=( # wildcards & custom keys ok
   'X*' 'x*' alias:posix 'group*:posix'  # reserved ok
@@ -978,6 +979,13 @@ cf_getscheds (){ local l
   aJQIA=(["@|schedule"]=1) # '@' is always a schedule qname
   while read -r l; do [ "$l" ] && aJQIA[$l|schedule]=1; done < <(cfq - schednames "*" "$cYP_JCFLT")
 }
+# Guru dev/debug code inclusion
+cf_gurumods (){ local t
+  [ "$cfGURUMODS" ] || return 0
+  t=$(chk_suppfile "$cfGURUMODS") || { [ "$t" = "$cfGURUMODS" ] || t="$cfGURUMODS ($t)"; exit_err "Bad cfGURUMODS: $t"; }
+  cfGURUMODS="$t"
+  . "$t" 2>/dev/null || exit_err "cfGURUMODS failed sourcing"
+}
 
 chk_conffile (){ [ "$cfCFGFN" ] || exit_err "Cfg file required for $aCMDNAME!" "$cERR_CMD"; cf_getscheds; }
 # Check if file $1 may be dumped to
@@ -1168,6 +1176,9 @@ init (){ local l s t; aSUNIT=""
   trap "on_signal SIGHUP"  SIGHUP
   [ "$aMYNAME" = "$cMYNAME" ] && s="" || s="$aMYNAME - "
   msg "$s$cMYNAME v$cMYVERSION - uid $EUID $t" $l
+  # Guru mod failure gives an exit when it occurs - BEFORE this func is run.
+  # Success we report here, at a decent place right before the config info.
+  [ "$cfGURUMODS" ] && info "Guru-Modded from $cfGURUMODS"
 }
 
 # Check for snoozing -  and do so in case
@@ -1441,7 +1452,7 @@ vfset (){ local -n fn_=$1 rn_=$3; local f fm cn fup
   for f in "${fn_[@]}"; do fm="${f%:*}"
     # shellcheck disable=SC2053
     if [[ "$2" = $fm ]]; then
-      ((!cfGURU_NO_WARN_WILD_KEY)) && [ "$fm" = "*" ] && warn "Unexpected key '$2'"
+      ((cfGURU_WARN_WILD_KEY)) && [ "$fm" = "*" ] && warn "Unexpected key '$2'"
       if [[ $f = *:* ]]; then cn="${f##*:}"
         ! chk_varclass "$rn_" "$cn" && cfgerr "Bad value for '$2': '$rn_'" && return 1
         if [ "$cn" = "bool" ]; then [ "$rn_" = "true"  ] && rn_=1; [ "$rn_" = "false" ] && rn_=0
@@ -3435,17 +3446,11 @@ Time to get prepared for <b>meeting</b> intelligent beings, <b>not for scaring t
   echo
 }
 
-#FIXME
-# DEV/DEBUG HELPER STUB
-cmd_test (){ local -a args=("$@")
-  info "🢃 Args:" && dump_ary args
-
-}
-
 ##############################################################################
 # Main                                                                       #
 ##############################################################################
 
+cf_gurumods # apply dev/debug guru mods if given per env
 init
 proc_args "$@"
 "cmd_$aCMDNAME" "${aCMDARGS[@]}"
