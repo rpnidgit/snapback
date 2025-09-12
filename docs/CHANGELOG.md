@@ -19,12 +19,25 @@ once wider feedback got digested and any significant "environmental myopia" base
 -->
 
 ## Unreleased
+- Nothing yet.
+
+
+## 0.95.2
+
+### Added
+- New pruning method 'native' as an agnostic alternative to the explicit native ones ('borg'/'snapper').
+- Guru feature: special `cfGURUMODS` for *pre-init* code inclusion.
+- Guru feature: special `custom` job class.
 
 ### Changed
 - `archive.create` config: `pattern` & `exclude.pattern` may now also be given as sequences ([#1][1]).
 - Invocation info line: unit infos are now suppressed for tty sessions, and
   - ignoring non-service/timer and `user@UID.service` units,
   - suffix-stripped.
+- Reworded some error outputs.
+- (internal) Modified some namings.
+- (internal) Job config processing finally uses class specific delegates.
+- (internal) Job var filters are now more specific.
 
 ### Fixed
 - `cfCFG` was not properly normalized & checked when given per the environment.
