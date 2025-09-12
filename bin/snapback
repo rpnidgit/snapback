@@ -15,7 +15,8 @@
 #    g*       std. globals
 #    hHELP_*  help topic texts        (compgen-selected)
 #    cmd_*    command handler funcs   (compgen-selected)
-#    jc_*     job class handler funcs
+#    jc_*     job class config funcs
+#    jh_*     job class handler funcs
 # 3. Will work correctly only before April 5th, 2063 Midnight MDT
 #    due to internal, special purpose timestamp use.
 #-----------------------------------------------------------------------------
@@ -174,30 +175,34 @@ declare -ra cVFLT_GLOBAL=( # no general wildcarding nor custom stuff here!
   umask:noct
   'guru_*'
   )
-declare -ra cVFLT_JOBS=( # wildcards & custom keys ok
-  'X*' 'x*' alias:posix 'group*:posix'  # reserved ok
-  create prune        # needed for "empty task handling"
-  create_comment:noquote create_rw:bool 'create_snap_max*:nint' create_no_samefs:bool create_numids:bool create_prefix:arcpref
-  create_cachemode:borgfcm create_compression:borgcpr
-  'create_exclude_caches:bool' create_exclude_tagfile:file create_exclude_tagkeep:bool
-  'create_*patternfile:path' 'create_*pattern*:borgpat'
-  name:file name_glob:glob
-  prune_keep_within:spalnum 'prune_keep_*:nint' prune_method:spalpha
-  repo:limname
-  'schedule*:schedspec'
-  task_order:taskorder
-  '*disabled:bool'    # from job/task disabling extras
-  '*name_ident:file'
-  '*own:bool'
-  '*pre' '*post'
-  '*snaptag:inregex'  # most general case here, refined later
-  '*time_fmt:file'
-  '*borg*opts'
-  '*' # all others are ok here
-  )
 declare -ra cVFLT_NODES=( # no general wildcarding here!
   path:path automount:bool base:limname snappercfg:file repo_method:borgenc 'repo_pass*' repo_version:inregex
   'X*' 'x*' alias:posix 'group*:posix'  # reserved ok
+  )
+# Job var filters
+declare -ra cVFLT__gen=('schedule*:schedspec' 'disabled:bool' 'pre' 'post' 'X*' 'x*' alias:posix 'group*:posix')
+declare -ra cVFLT__borg=('*borg*opts')
+declare -ra cVFLT__crpr=(
+  create create_disabled:bool create_pre create_post
+  prune  prune_disabled:bool  prune_pre  prune_post
+  prune_keep_within:spalnum 'prune_keep_*:nint' prune_method:spalpha
+  )
+declare -ra cVFLT_compact=() # nothing own atm
+declare -ra cVFLT_archive=(
+  name:file name_glob:glob '*name_ident:file' repo:limname
+  create_cachemode:borgfcm create_comment:noquote create_compression:borgcpr
+  create_no_samefs:bool create_numids:bool create_prefix:arcpref
+  create_exclude_caches:bool create_exclude_tagfile:file create_exclude_tagkeep:bool
+  'create_*patternfile:path' 'create_*pattern*:borgpat'
+  create_snap_snaptag:inregex  # most general case here, refined later
+  'create_snap_max*:nint' 'create_snap_*own:bool'
+  '*time_fmt:file'
+  task_order:taskorder
+  )
+declare -ra cVFLT_snapshot=(
+  snaptag:inregex  # most general case here, refined later
+  create_comment:noquote create_rw:bool
+  task_order:taskorder
   )
 # Bad chars/stuff to look for, per (own) var classes, leading ! negates the matching
 # Note we cannot use negated classes as we're only dealing with bad chars from the C locale here
@@ -236,11 +241,11 @@ declare -rA cVF_2ARY=([output_colors_custom_]="aCCF_CUSTOM")
 # Helpers for consolidated flag display: name | text : 0-text | 1-text
 declare -ra cRUNFLAG_INFO=(
   "cfSYSTEMD_SETTIMER|Timer Updates|no|YES"
-  "cfQUEUE_NOPERJOB|Per Job Checks|yes|NO"    "cfQUEUE_CLEANALL|Clean All Lists|no|YES"
+  "cfQUEUE_NOPERJOB|Per Job Checks|yes|NO"   "cfQUEUE_CLEANALL|Clean All Lists|no|YES"
   "cfQUEUE_ADDLAST|Added Jobs Last|no|YES"
-  "cfQUEUE_SNAPFIRST|Snapshes First|no|YES"   "cfQUEUE_COMPLAST|Compacts Last|no|YES"
-  "cfQUEUE_NOBACKLOG|Backlogging|yes|NO"      "cfQUEUE_NORESCAN|Rescanning|yes|NO"
-  "cfNOCREATE|Creations|yes|NO"               "cfNOPRUNE|Prunings|yes|NO"
+  "cfQUEUE_SNAPFIRST|Snapshes First|no|YES"  "cfQUEUE_COMPLAST|Compacts Last|no|YES"
+  "cfQUEUE_NOBACKLOG|Backlogging|yes|NO"     "cfQUEUE_NORESCAN|Rescanning|yes|NO"
+  "cfNOCREATE|Creations|yes|NO"              "cfNOPRUNE|Prunings|yes|NO"
   )
 
 # Std. YAML Queries
@@ -1462,7 +1467,7 @@ vfset (){ local -n fn_=$1 rn_=$3; local f fm cn fup
       return 0
     fi
   done
-  ((cfGURU_ALLOW_ANY_KEY)) || { cfgerr "Illegal key '$2'"; return 1; }
+  ((cfGURU_ALLOW_ANY_KEY)) || { cfgerr "Bad key '$2'"; return 1; }
 }
 # Set a bunch of vars from k=v buffer $2, tested against $1, output opt. prefixed with $3
 vfsetbundle (){ local -n flt_=$1 buf_=$2; local -i p r=0; local a l k v
@@ -1636,8 +1641,8 @@ ccf_parse (){ local -n ca_=$1 st_=$5; local r mc="$4" nc="$6" pb="$7"; local -i 
         fi
       done
       ((pb))                  && st_="P SEQ REFS$sr"  && return 0   # pushback
-      r="$sr";                                             id=SEQ
-    elif _ccf_issgr  "$2"; then  r="$2";                   id=SGR   # Full SGR cmd(s)
+      r="$sr";                                           id=SEQ
+    elif _ccf_issgr  "$2"; then  r="$2";                 id=SGR     # Full SGR cmd(s)
       [[ ! "$2" =~ ^(($'\e'|\\e)\[[0-9\;]*m)+$ ]] && \
                                  st_="E SGR BAD:'$2'" && return 1
       _ccf_okmax  256 "$2" "38\;5\;"                  || return 1
@@ -1822,11 +1827,11 @@ sysd_get_service (){ local -n sra_=$1; local u
 }
 # Get path to timer dropin into varname $1, optionally using unit name $2
 sysd_get_dropin (){ local -A ra; local p="$cfSYSTEMD_TIMER_DROPIN"
-  [ ! "$p" ] && error "No 'timer_dropin' configured" && return 1
+  [ ! "$p" ]    && error "No 'timer_dropin' configured" && return 1
   if [[ "$p" != "/"* ]]; then
     sysd_get_timer ra "$2" && [ "${ra[FragmentPath]}" ] && p="${ra[FragmentPath]}.d/$p" || p=""
   fi
-  [ ! -f "$p" ] && error "Could not find timer dropin" && return 1
+  [ ! -f "$p" ] && error "Could not find timer dropin"  && return 1
   printf -v "$1" '%s' "$p"
 }
 # Update timer dropin, $1 nonempty for standalone command call
@@ -2172,124 +2177,137 @@ node_bmnts_clr (){ local -a ia ma; local -i i rl=$cUMOUNT_MAXLOOPS; local nd="$c
 ##############################################################################
 # %Job Stuff
 
-# Pre-check & get job data for $2 into hash $1
-job_get (){ local -n ja_=$1; local -i fbv fcr fpr fto r=0; local jn l k v aBORGVN="$aBORGVN"
-  job_splitspec "$1" "$2"; jn="${ja_[_jn]}"
-  ! declare -F "jc_${ja_[_jc]}" >/dev/null && cfgerr "No handler for job class"         && return 1
-
-  # 1. Defaults & Checks
-  ! node_get "$jn"                         && cfgerr "Bad job node"                     && return 1
-  case ${ja_[_jc]} in
-    compact)  ! dowehave "$aBORGCMD"       && error  "Missing: Compact jobs need borg!" && return 1
-              fbv=1;;
-    archive)  ! dowehave "$aBORGCMD"       && error  "Missing: Archive jobs need borg!" && return 1
-              ja_[task_order]="${cfARCHIVE_DF_TASK_ORDER:-$cDF_TASK_ORDER}"
-              ja_[name_glob]="${cfARCHIVE_DF_NAME_GLOB:-$cDF_NAME_GLOB}"
-              ja_[name_ident]="${cfARCHIVE_DF_NAME_IDENT:-$cDF_NAME_IDENT}"
-              ja_[name]="${cfARCHIVE_DF_NAME-"$cDF_NAME"}"
-              ja_[create_time_fmt]="${cfARCHIVE_DF_TIME_FMT:-$cDF_TIME_FMT}"
-              ja_[create_compression]="${cfARCHIVE_DF_COMPRESSION}"
-              ja_[create_prefix]="${cfARCHIVE_DF_PREFIX}"
-              ja_[create_snap_snaptag]="${cfARCHIVE_DF_SNAPTAG-archive}"
-              ja_[create_snap_useown]=1
-              ja_[prune_method]="${cfARCHIVE_DF_PRUNE_METHOD:-borg}"
-              [ "${gNDC[$jn|_scfg]}" ] && ja_[_sn_arch]=1 # always snap arch snapped nodes!
-              ((!ja_[_sn_arch])) && v="${gNDC[$jn|base]}" && [ "$v" ] && [ "${gNDC[$v|_scfg]}" ] && ja_[_sn_arch]=1
-              fbv=1; fcr=1; fpr=1; fto=1;;
-    snapshot) ! dowehave "$cfBIN_SNAPPER"  && error  "Missing: Snapshot jobs need snapper!"     && return 1
-              #! dowehave btrfs             && error  "Missing: Snapshot jobs need the btrfs binary!" && return 1
-              [ ! "${gNDC[$jn|_scfg]}" ]   && error  "Sys ERR: $jn is not a snapper subvolume!" && return 1
-              ja_[task_order]="${cfSNAPSHOT_DF_TASK_ORDER:-$cDF_TASK_ORDER}"
-              ja_[snaptag]="$cfSNAPSHOT_DF_SNAPTAG"
-              ja_[prune_method]="${cfSNAPSHOT_DF_PRUNE_METHOD:-snapper}"
-              fcr=1; fpr=1;;
+# Config handlers for job_get()
+jc_compact (){ case $1 in p*) check[borg]=1; cfilt+=("${cVFLT_compact[@]}");; esac; }
+jc_archive (){ local -i nv r; local m ni v
+  case $1 in
+  p*) ja_[task_order]="${cfARCHIVE_DF_TASK_ORDER:-$cDF_TASK_ORDER}"
+      ja_[name_glob]="${cfARCHIVE_DF_NAME_GLOB:-$cDF_NAME_GLOB}"
+      ja_[name_ident]="${cfARCHIVE_DF_NAME_IDENT:-$cDF_NAME_IDENT}"
+      ja_[name]="${cfARCHIVE_DF_NAME-"$cDF_NAME"}"
+      ja_[create_time_fmt]="${cfARCHIVE_DF_TIME_FMT:-$cDF_TIME_FMT}"
+      ja_[create_compression]="${cfARCHIVE_DF_COMPRESSION}"
+      ja_[create_prefix]="${cfARCHIVE_DF_PREFIX}"
+      ja_[create_snap_snaptag]="${cfARCHIVE_DF_SNAPTAG-archive}"
+      ja_[create_snap_useown]=1
+      ja_[prune_method]="${cfARCHIVE_DF_PRUNE_METHOD:-native}"
+      [ "${gNDC[$jn|_scfg]}" ] && ja_[_ac_snap]=1 # always snap arch snapped nodes!
+      ((!ja_[_ac_snap])) && v="${gNDC[$jn|base]}" && [ "$v" ] && [ "${gNDC[$v|_scfg]}" ] && ja_[_ac_snap]=1
+      check[borg]=1; check[repo]=1; check[create]=1; check[prune]=1
+      cfilt+=("${cVFLT_archive[@]}")
+      ;;
+  f*) [ "${ja_[name]}" ] && nv=2 || nv=1; xvmsg J "Using v$nv archive naming"
+      if ((nv==1));
+        then [ ! "${ja_[name_glob]}" ]       && cfgerr "Archive name glob needed for v1 naming"  && r=1
+        else unset "ja_[name_glob]"; unset "ja_[name_ident]"; unset "ja_[create_name_ident]"
+      fi
+      if ((ja_[_do_create])); then
+        if ((nv==1));
+        then ni="${ja_[create_name_ident]}"; [ ! "$ni" ] && ni="${ja_[name_ident]}" # "inherit" if not specified
+             [ ! "$ni" ]                     && cfgerr "Archive name ident needed for v1 naming" && r=1
+             v="${ja_[name_glob]/"*"/$l}"; v="${v//"*"}"; v="${v//"?"/_}"
+             ja_[_ac_name]="$v" # combined final name, remaining '*' deleted, '?' replaced
+             if ((aBORGVN>=200)); then
+               v="${ja_[name_glob]//*([.:_~=+-])"*"*([.:_~=+-])}"; v="${v//"?"/_}"
+               ja_[_ac_suff]="$v"  # reduced glob for use as v2 cache suffix
+             fi
+        else ja_[_ac_name]="${ja_[name]}"
+        fi
+        ((ja_[create_snap_useown])) && ! chk_varclass "${ja_[create_snap_snaptag]}" safetag \
+                                         && cfgerr "Plain snaptag needed for snapshot creation!" && r=1
+      fi
+      if ((ja_[_do_prune])); then m="${ja_[prune_method]}"
+        ((nv==1)) && ja_[_ap_filt]="${ja_[name_glob]}" || ja_[_ap_filt]="${ja_[name]}"
+        case $m in native|borg) [ "${ja_[prune_keep_quarterly]}" ] && ((aBORGVN<141)) && \
+                                  cfgerr "Method '$m' needs Borg v1.4.1+ for 'quarterly' keeps!" && r=1;;
+                             *) prune_methfix m && ja_[prune_method]="$m"                        || r=1;;
+        esac
+      fi
+      ;;
   esac
-  ((cfNOCREATE)) && fcr=0; ((cfNOPRUNE)) && fpr=0
+  ((!r))
+}
+jc_snapshot (){ local -i b r; local m s
+  case $1 in
+  p*) [ ! "${gNDC[$jn|_scfg]}" ] && error "Sys ERR: $jn is not a snapper subvolume!" && return 1 # includes "snapper missing"
+      ja_[task_order]="${cfSNAPSHOT_DF_TASK_ORDER:-$cDF_TASK_ORDER}"
+      ja_[snaptag]="$cfSNAPSHOT_DF_SNAPTAG"
+      ja_[prune_method]="${cfSNAPSHOT_DF_PRUNE_METHOD:-native}"
+      check[create]=1; check[prune]=1
+      cfilt+=("${cVFLT_snapshot[@]}")
+      ;;
+  f*) s="${ja_[snaptag]}"
+      if ((ja_[_do_create])); then
+        ! chk_varclass "$s" safetag && cfgerr "Plain snaptag needed for snapshot creation!"        && r=1
+        [ "$s" = "empty-pre-post" ] && cfgerr "Cannot create pre/post snapshots, only prune them!" && r=1
+      fi
+      if ((ja_[_do_prune]));  then m="${ja_[prune_method]}"
+        case $m in native|snapper) [[ " timeline number empty-pre-post " != *" $s "* ]] && b=1;;
+                                *) [ "empty-pre-post" = "$s" ]                          && b=1
+                                   prune_methfix m && ja_[prune_method]="$m"            || r=1;;
+        esac
+        ((b)) && cfgerr "Method '$m' cannot prune '$s' tagged snapshots!" && r=1
+      fi
+      ;;
+  esac
+  ((!r))
+}
+jc_custom (){ case $1 in p*) cfilt+=("source:path" "*");; esac; }
 
-  # 2. Read current job data
-  while read -r l; do k=${l%%=*}
-    [ "$k" ]                                                     || continue
-    [[ "$k" = _* ]]                                              && continue # no overwriting of internals!
-    if [[ "$k" = "create"* ]]; then ((fcr)) && ja_[_do_create]=1 || continue ; fi
-    if [[ "$k" = "prune"*  ]]; then ((fpr)) && ja_[_do_prune]=1  || continue ; fi
-    ja_[$k]="${l#*=}"
-    vfset cVFLT_JOBS "$k" "ja_[$k]" || r=1
-  done  < <(cfq - jobdata "$jn" "${ja_[_jc]}" "${ja_[_ji]}")
-  vdate k "$cfSTATEDIR/jlast/$2" FE && ja_[_tlast]="$k"
+# Pre-check & get job data for $2 into hash $1
+job_get (){ local -n ja_=$1; local -A check=(); local -a cfilt=("${cVFLT__gen[@]}")
+            local -i r=0; local jc jn k v aBORGVN="$aBORGVN"
+  job_splitspec "$1" "$2"; jn="${ja_[_jn]}"; jc="${ja_[_jc]}"
+  ! declare -F "jc_$jc" >/dev/null  && cfgerr "No configurator for job class" && return 1
+  ! declare -F "jh_$jc" >/dev/null  && cfgerr "No handler for job class"      && return 1
+  ! node_get "$jn"                  && cfgerr "Bad job node"                  && return 1
 
-  # 3. Post-Checks & some cleaning, incl. "empty task workaround"
+  "jc_$jc" prep                                                                       || return 1
+  ((check[borg])) && ! dowehave "$aBORGCMD" && error  "Missing: This job needs borg!" && return 1
+  ((check[borg]))                   && cfilt+=("${cVFLT__borg[@]}")
+  ((check[create] || check[prune])) && cfilt+=("${cVFLT__crpr[@]}")
+  #cfilt+=("*")  #FIXME: Do we want wildcards all the time?
+  ((cfNOCREATE)) && check[create]=0; ((cfNOPRUNE)) && check[prune]=0
+
+  # Get job config data
+  while read -r v; do k=${v%%=*}
+    [ "$k" ]               || continue
+    [[ "$k" = _* ]]        && continue # no overwriting internals!
+    [[ "$k" = "create"* ]] && { ((check[create])) && ja_[_do_create]=1 || continue; }
+    [[ "$k" = "prune"*  ]] && { ((check[prune]))  && ja_[_do_prune]=1  || continue; }
+    ja_[$k]="${v#*=}"
+    vfset cfilt "$k" "ja_[$k]" || r=1 # NOT bailing out to report as many further probs as possible
+  done  < <(cfq - jobdata "$jn" "$jc" "${ja_[_ji]}")
+  vdate v "$cfSTATEDIR/jlast/$2" FE && ja_[_lastrun]="$v" # add last runtime for convenience
+  # Common cleanups & clutter removals, incl. "empty task workaround"
+  unset "ja_[disabled]"
   if [ "${ja_[create]}" ] || ((ja_[create_disabled])); then unset "ja_[_do_create]" ; fi; unset "ja_[create]"
   if [ "${ja_[prune]}" ]  || ((ja_[prune_disabled]));  then unset "ja_[_do_prune]"  ; fi; unset "ja_[prune]"
-  unset "ja_[disabled]"   # remnant from opt. job disabling, so clear it
   for k in "${!ja_[@]}"; do
     [ ! "${ja_[$k]}" ]                              && unset "ja_[$k]" && continue
-    case $k in create_snap_*) ! ((ja_[_sn_arch]))   && unset "ja_[$k]" && continue ;;&
+    case $k in create_snap_*) ! ((ja_[_ac_snap]))   && unset "ja_[$k]" && continue ;;&
                create*)       ! ((ja_[_do_create])) && unset "ja_[$k]" && continue ;;
                prune*)        ! ((ja_[_do_prune]))  && unset "ja_[$k]" && continue ;;
     esac
   done
-  if ((fbv)); then # borg version needed
-    if ((fto));
-      then v="${ja_[repo]}"
-        { [ ! "$v" ] || ! node_get "$v"; }          && cfgerr "Bad or missing repo node '$v'"          && r=1
-      else v="$jn"; unset "ja_[repo]"
+  # Common borg/repo checks & stuff
+  if ((check[borg])); then
+    if ((check[repo]));
+    then v="${ja_[repo]}"; { [ ! "$v" ] || ! node_get "$v"; } && cfgerr "Bad or missing repo node '$v'" && r=1
+    else v="$jn"; unset "ja_[repo]"
     fi
-    k="${gNDC[$v|repo_version]}"; [ "$k" ] && ja_[_bvm]="$k"
-    if sel_borg v "$k"; then ((v)) && xvmsg C "Using ${aBORGS[$v|cf]}, v${aBORGS[$v|vs]}"
-      ja_[_bid]="$v"; aBORGVN="${aBORGS[$v|vn]}" # JUST changing aBORGVN here to get variants straight, NOT the cmd!
-    else                                               cfgerr "Got no borg for repo (version: '$k')"   && r=1
+    k="${gNDC[$v|repo_version]}"; [ "$k" ] && ja_[_repovsn]="$k"
+    if sel_borg v "$k";
+    then ((v)) && xvmsg C "Using ${aBORGS[$v|cf]}, v${aBORGS[$v|vs]}"
+         # JUST setting aBORGVN here to get variants straight, NOT the cmd!
+         ja_[_borgbin]="$v"; aBORGVN="${aBORGS[$v|vn]}"; ja_[_borgvsn]="$aBORGVN"
+    else error "Got no borg for repo (version: '$k')" && r=1
     fi
     ((aBORGVN<200)) && unset "ja_[name]"
   fi
-  if [ "${ja_[_jc]}" = "archive" ]; then
-    [ "${ja_[name]}" ] && k=2 || k=1
-    xvmsg J "Using v$k archive naming"
-    if ((k==1)); then [ ! "${ja_[name_glob]}" ]     && cfgerr "Archive name glob needed for v1 naming" && r=1
-                 else unset "ja_[name_glob]"; unset "ja_[name_ident]"; unset "ja_[create_name_ident]"
-    fi
-  fi
-  if ((ja_[_do_create])); then
-    case ${ja_[_jc]} in
-      archive)  if ((k==1)); then
-                  l="${ja_[create_name_ident]}"; [ ! "$l" ] && l="${ja_[name_ident]}" # "inherit" if not specified
-                  [ ! "$l" ]                             && cfgerr "Archive name ident needed for v1 naming"            && r=1
-                  v="${ja_[name_glob]/"*"/$l}"; v="${v//"*"}"; v="${v//"?"/_}"
-                  ja_[_ac_name]="$v" # combined final name, remaining '*' deleted, '?' replaced
-                  if ((aBORGVN>=200)); then
-                    v="${ja_[name_glob]//*([.:_~=+-])"*"*([.:_~=+-])}"; v="${v//"?"/_}"
-                    ja_[_ac_suff]="$v"  # reduced glob for use as v2 cache suffix
-                  fi
-                else ja_[_ac_name]="${ja_[name]}"
-                fi
-                ((ja_[create_snap_useown])) && ! chk_varclass "${ja_[create_snap_snaptag]}" safetag \
-                                                         && cfgerr "Plain snaptag needed for own archiving snapshots!"  && r=1
-                ;;
-      snapshot) ! chk_varclass "${ja_[snaptag]}" safetag && cfgerr "Plain snaptag needed for snapshot creation!"        && r=1
-                [ "${ja_[snaptag]}" = "empty-pre-post" ] && cfgerr "Cannot create pre/post snapshots, only prune them!" && r=1
-                ;;
-    esac
-  fi
-  if ((ja_[_do_prune])); then l="${ja_[prune_method]}"
-    case ${ja_[_jc]} in
-      archive)  ((k==1)) && ja_[_ap_filt]="${ja_[name_glob]}" || ja_[_ap_filt]="${ja_[name]}"
-                if [ "$l" = "borg" ]; then
-                  [ "${ja_[prune_keep_quarterly]}" ] && ((aBORGVN<141)) \
-                                                    && cfgerr "Borg v1.4.1+ needed for 'quarterly' with method 'borg'!" && r=1
-                else
-                  prune_methfix l && ja_[prune_method]="$l" || r=1
-                fi
-               ;;
-      snapshot) v="${ja_[snaptag]}"
-                if [ "$l" = "snapper" ]; then
-                  [[ " timeline number empty-pre-post " != *" $v "* ]] \
-                                                    && cfgerr "Cannot prune '$v' tags with method 'snapper'!"           && r=1
-                else
-                  [ "empty-pre-post" = "$v" ]       && cfgerr "Pruning pre/post snapshots needs method 'snapper'!"      && r=1
-                  prune_methfix l && ja_[prune_method]="$l" || r=1
-                fi
-                ;;
-    esac
-  fi
+
+  "jc_$jc" fin || r=1
+
   ((r)) && return 1
   xvmsg J "🢃 Job Data" && dump_dmap ja_
   :
@@ -2557,11 +2575,11 @@ jqp (){
     qla_del_job gJQA "$1" && _jqpu # our curr qlist file
     ((cfDRYRUN)) || touch -d "@$tCURREPO" "$cfSTATEDIR/jlast/$1" &>/dev/null
     for fn in "$cfSTATEDIR"/@*; do qn="${fn##*/}"; qn="${qn:1}"
-      [ "$qn" = "$aJQN" ]                            && continue
-      [ -f "$fn" ]                                   || continue
-      ((!aJQIA[$qn|schedule] && !cfQUEUE_CLEANALL))  && continue
+      [ "$qn" = "$aJQN" ]                           && continue
+      [ -f "$fn" ]                                  || continue
+      ((!aJQIA[$qn|schedule] && !cfQUEUE_CLEANALL)) && continue
       xvmsg Q "Clearing from @$qn"
-      ((cfDRYRUN))                                   && continue
+      ((cfDRYRUN))                                  && continue
       qlf_get ja "$qn" NOFIX && qla_del_job ja "$1" && qlf_upd "$qn" ja
     done
     :
@@ -2573,7 +2591,7 @@ jqp (){
       aMSGPRE="$js"
       info "• Started"
       timer_start JOB
-      ! job_get jd "$js"                                         && error "Skipped: Bad job cfg"                && continue
+      ! job_get jd "$js"                                         && error "Skipped: Bad job cfg"          && continue
     # ---- start par section
       # all our jobs got optional pre- and post commands with identical logic, so we do them right here
       # and only leave lower level pre/posts for them
@@ -2585,18 +2603,18 @@ jqp (){
         then declare -x SNAPBACK_REPO="${jd[repo]}"; declare -x SNAPBACK_REPO_PATH="${gNDC[${jd[repo]}|path]}"
         else unset      SNAPBACK_REPO;               unset      SNAPBACK_REPO_PATH
       fi
-      if [ "${jd[_bid]}" ];
-        then aBORGVN="${aBORGS[${jd[_bid]}|vn]}";    aBORGCMD="${aBORGS[${jd[_bid]}|cmd]}"
-             declare -x SNAPBACK_BORG_VN="$aBORGVN"; declare -x SNAPBACK_BORG_CMD="$aBORGCMD"
-        else unset      SNAPBACK_BORG_VN;            unset      SNAPBACK_BORG_CMD
+      if [ "${jd[_borgbin]}" ];
+        then aBORGVN="${aBORGS[${jd[_borgbin]}|vn]}"; aBORGCMD="${aBORGS[${jd[_borgbin]}|cmd]}"
+             declare -x SNAPBACK_BORG_VN="$aBORGVN";  declare -x SNAPBACK_BORG_CMD="$aBORGCMD"
+        else unset      SNAPBACK_BORG_VN;             unset      SNAPBACK_BORG_CMD
       fi
-      ! run_custcmd log "Pre-Job Cmd" "${jd[pre]}"               && warn  "Aborted: Non-zero pre-job cmd"       && s=2
+      ! run_custcmd log "Pre-Job Cmd" "${jd[pre]}"               && warn  "Aborted: Non-zero pre-job cmd" && s=2
       if ((!s)); then
-        ! node_amnt "${jd[_jn]}"                                 && error "Node not mounted"                    && s=1
-        ((!s)) && [ "${jd[repo]}" ] && ! node_amnt "${jd[repo]}" && error "Repo not mounted"                    && s=1
+        ! node_amnt "${jd[_jn]}"                                 && error "Node not mounted"              && s=1
+        ((!s)) && [ "${jd[repo]}" ] && ! node_amnt "${jd[repo]}" && error "Repo not mounted"              && s=1
         if ((!s)); then # now the actual job processing
           SNAPBACK_JOB="$js"
-          "jc_${jd[_jc]}" jd 2>/dev/null || { s=$?; error "Job failed"; }
+          "jh_${jd[_jc]}" jd 2>/dev/null || { s=$?; error "Job failed"; }
         fi
         # and finally any post cmd, uncondidionally
         SNAPBACK_JOB="${js}.post"
@@ -2710,7 +2728,7 @@ prune_select (){ local -n psa_=$1 pca_=$2 pra_=$3; local -i i j l="${pca_[_len]:
 
 # Job Task Wrapper using $1 (job class),  $2 ("A"|"S") and inherited
 # vars to handle task sequence & surrounding infos in simple fashion
-_jctw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK_JOB" aMSGPRE="$aMSGPRE"
+_jhtw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK_JOB" aMSGPRE="$aMSGPRE"
   [ "${o^^}" == "C" ] && o="CP" || o="PC"
   for ((i=0; i<${#o}; i++)); do
     case ${o:$i:1} in C) a="create" ;;
@@ -2723,8 +2741,8 @@ _jctw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK
       SNAPBACK_JOB="${je}.${a}.pre"
       if run_custcmd log "Pre-Task Cmd" "${ja_[${a}_pre]}"; then
         timer_start TASK
-        ! declare -F "_jc_${1}_$a" >/dev/null && error "OOPS!" && return 1
-        "_jc_${1}_$a" || r=$?
+        ! declare -F "_jh_${1}_$a" >/dev/null && error "OOPS!" && return 1
+        "_jh_${1}_$a" || r=$?
         timer_time  TASK tt && info "• Finished after ${tt}s, status $r"
         SNAPBACK_JOB="${je}.${a}.post"
         SNAPBACK_JOB_STATUS=$r
@@ -2737,10 +2755,10 @@ _jctw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK
   return "$r"
 }
 # Replace placeholders in $1 acc. to $repl hash
-_jcprepl (){ local k n="$1"; for k in "${!repl[@]}"; do n="${n//"{$k}"/${repl[$k]}}"; done; echo "$n"; }
+_jhprepl (){ local k n="$1"; for k in "${!repl[@]}"; do n="${n//"{$k}"/${repl[$k]}}"; done; echo "$n"; }
 
-# JC Handler: archive handling acc. to job info $1
-jc_archive (){ local -n ja_=$1;
+# JH: archive handling acc. to job info $1
+jh_archive (){ local -n ja_=$1;
                local -r node="${ja_[_jn]}" rnode="${ja_[repo]}"
                local -ra rba=("${gNDC[$rnode|path]}" "$(node_get_pass "$rnode")")
                local -i rc=0 rp=0; local tt
@@ -2752,10 +2770,10 @@ jc_archive (){ local -n ja_=$1;
                  [TNOW]="_"  [SNUM]="_"  [STIM]="_"  [TSYN]="_"
                )
   info "Using repo $rnode"
-  ((${ja_[_bid]})) && info "Using ${aBORGS[${ja_[_bid]}|cf]}, v${aBORGS[${ja_[_bid]}|vs]}"
-  _jctw archive A
+  ((${ja_[_borgbin]})) && info "Using ${aBORGS[${ja_[_borgbin]}|cf]}, v${aBORGS[${ja_[_borgbin]}|vs]}"
+  _jhtw archive A
 }
-_jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0; local snode tfmt k v it
+_jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0; local snode tfmt k v it
   ((aBORGVN<200)) && tfmt="+%FT%T" || tfmt="+%FT%T+00:00"
   # get the snapped node - if applicable
   [ "${gNDC[$node|_scfg]}" ] && snode="$node"
@@ -2802,9 +2820,9 @@ _jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
   }
   # Run borg incl. bind mount wrapping & prefixing stuff
   # 1:node, 2:snapshot num (0-alike for classic path), 3+ extra args (not in $args & w/o archive name & path)
-  _arwrap (){ local a=$(_jcprepl "${ja_[_ac_name]}") adir mp t; local -i r=0
+  _arwrap (){ local a=$(_jhprepl "${ja_[_ac_name]}") adir mp t; local -i r=0
     if [ "${ja_[_ac_suff]}" ]; then
-      t=$(_jcprepl "${ja_[_ac_suff]}")
+      t=$(_jhprepl "${ja_[_ac_suff]}")
       xvmsg A "⮡ Using cache suffix '$t'"
       declare -x BORG_FILES_CACHE_SUFFIX="$t"
     fi
@@ -2840,9 +2858,9 @@ _jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
     else cfgerr "exclude_patternfile not found or bad: '$t'" && r=1
   fi
   #FIXME: ?? move comment & cmdopts (as overrides) into wrapper to expand more placeholders in comment?
-  [ "${ja_[create_comment]}" ]          && args+=(--comment "$(_jcprepl "${ja_[create_comment]}")")
+  [ "${ja_[create_comment]}" ]          && args+=(--comment "$(_jhprepl "${ja_[create_comment]}")")
   [ "${ja_[create_borg_cmdopts]}" ]     && args+=("${ja_[create_borg_cmdopts]}")
-  ((!r)) && node_get_lat lat "$rnode" "$(_jcprepl "${ja_[_ap_filt]}")" || r=1
+  ((!r)) && node_get_lat lat "$rnode" "$(_jhprepl "${ja_[_ap_filt]}")" || r=1
   if ((!r)); then
     if [ ! "$snode" ]; then info "Using path"
       t=$(date "${ja_[create_time_fmt]}" 2>/dev/null)
@@ -2875,14 +2893,14 @@ _jc_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
   fi
   ((!r))
 }
-_jc_archive_prune (){ local -A ptbl; local -a args=("${rba[@]}") prul psel
+_jh_archive_prune (){ local -A ptbl; local -a args=("${rba[@]}") prul psel
                       local -i i j n r=0 s=0; local pm="${ja_[prune_method]}" k v it
   repl[TNOW]="*"; repl[SNUM]="*"; repl[STIM]="*"; repl[TSYN]="*"
   # shellcheck disable=SC2206
   [ "${ja_[prune_borg_genopts]}" ] && args+=(${ja_[prune_borg_genopts]})
   inopts A && inopts P && msg "method=$pm" --AP
   if prune_getrules prul ja_; then n=1
-    if [ "$pm" = "borg" ]; then info "Pruning natively with borg"
+    if [ "$pm" = "borg" ] || [ "$pm" = "native" ]; then info "Pruning natively with borg"
       args+=(prune --list); ((cfDRYRUN)) && args+=(-n)
       for v in "${prul[@]}"; do k="${v%%|*}"
         case $k in within) args+=(--keep-within "$(( (tCURREPO - ${v##*|}) / 3600 ))H");; # xlat to borg fmt
@@ -2892,9 +2910,9 @@ _jc_archive_prune (){ local -A ptbl; local -a args=("${rba[@]}") prul psel
       done
       # shellcheck disable=SC2206
       [ "${ja_[prune_borg_cmdopts]}" ]   && args+=(${ja_[prune_borg_cmdopts]})
-      run_borg log "${args[@]}" -a "$(_jcprepl "${ja_[_ap_filt]}")" || r=$?
+      run_borg log "${args[@]}" -a "$(_jhprepl "${ja_[_ap_filt]}")" || r=$?
     else info "Pruning ${pm#*|}"
-      node_get_archs ptbl "$rnode" "$(_jcprepl "${ja_[_ap_filt]}")" 999 && prune_select psel ptbl prul "${pm%%|*}"
+      node_get_archs ptbl "$rnode" "$(_jhprepl "${ja_[_ap_filt]}")" 999 && prune_select psel ptbl prul "${pm%%|*}"
       n=${#psel[@]}
       if inopts A && inopts P; then
         msg "🢃 Candidates" --AP
@@ -2924,13 +2942,13 @@ _jc_archive_prune (){ local -A ptbl; local -a args=("${rba[@]}") prul psel
   ((!r))
 }
 
-# JC Handler: snapshot handling acc. to job info $1
-jc_snapshot (){ local -n ja_=$1
+# JH: snapshot handling acc. to job info $1
+jh_snapshot (){ local -n ja_=$1
                 local -r node="${ja_[_jn]}"
   info "Using tag '${ja_[snaptag]}'"
-  _jctw snapshot S
+  _jhtw snapshot S
 }
-_jc_snapshot_create (){ local -a args; local -i r=0; local buf
+_jh_snapshot_create (){ local -a args; local -i r=0; local buf
   args=(-q create -p)
   [ "${ja_[create_comment]}" ] && args+=(-d "${ja_[create_comment]}")
   [ "${ja_[snaptag]}" ]        && args+=(-c "${ja_[snaptag]}")
@@ -2942,11 +2960,11 @@ _jc_snapshot_create (){ local -a args; local -i r=0; local buf
   ((r)) && error "Failed, Snapper reported \"$buf\"" || info "Created #$buf"
   ((!r))
 }
-_jc_snapshot_prune (){ local -A ptbl; local -a prul psel
+_jh_snapshot_prune (){ local -A ptbl; local -a prul psel
                        local -i i k v n r=0 s=0; local pm="${ja_[prune_method]}" it
   inopts S && inopts P && msg "method=$pm" --SP
   n=1
-  if [ "$pm" = "snapper" ]; then info "Pruning natively with snapper"
+  if [ "$pm" = "snapper" ] || [ "$pm" = "native" ]; then info "Pruning natively with snapper"
     if ((!cfDRYRUN)); then
       run_snapper log "${gNDC[$node|_scfg]}" cleanup "${ja_[snaptag]}" || r=$?
     fi
@@ -2978,9 +2996,9 @@ _jc_snapshot_prune (){ local -A ptbl; local -a prul psel
   ((!r))
 }
 
-# JC Handler: compact acc. to job info $1
+# JH: compact acc. to job info $1
 # Note borg compact supports --dry-run only from v1.4.1
-jc_compact (){ local -n ja_=$1; local -a args; local -r node="${ja_[_jn]}"
+jh_compact (){ local -n ja_=$1; local -a args; local -r node="${ja_[_jn]}"
   args=("${gNDC[$node|path]}")
   ((aBORGVN<200)) && args+=('-') || args+=("$(node_get_pass "$node")")
   # shellcheck disable=SC2206
@@ -2991,11 +3009,11 @@ jc_compact (){ local -n ja_=$1; local -a args; local -r node="${ja_[_jn]}"
   ((cfDRYRUN && aBORGVN<141)) || run_borg log "${args[@]}"
 }
 
-# DEV/DEBUG HELPER STUB
-# JC Handler: "custom" job class acc. to job info $1
-jc_custom (){ local -n ja_=$1; local -r node="${ja_[_jn]}"
-
-  return 0
+# JH: "custom" job class acc. to job info $1
+jh_custom (){ local -n ja_=$1; local -r node="${ja_[_jn]}"; local src=${ja_[source]} t
+  [ "$src" ] || { info "No custom job code!"; return 0; }
+  t=$(chk_suppfile "$src") && src="$t" || { [ "$t" = "$src" ] || t="$src ($t)"; error "Bad source file: $t"; return 1; }
+  . "$src" test 2>/dev/null || { error "Failed sourcing custom job code!"; return 1; }
 }
 
 ##############################################################################
@@ -3363,14 +3381,14 @@ cmd_show (){ local -A aa; local -a ia ja; local buf e j l s t spca spcb
     j*)   shift; snapper_getnames; get_borgs
           info "Job Info for '$*'"
           qla_collate ja 0 "$@"     || exit_err "Job collation aborted!"
-          ((!${#ja[@]}))            && cprintf warn '\t%s\n\n' "(no valid jobs selected)"    && return 1
+          ((!${#ja[@]}))            && cprintf warn '\t%s\n\n' "(no valid jobs selected)" && return 1
           spca='                   '
           for e in "${ja[@]}"; do j="${e%%|*}"; aa=()
             printf '\n\t%s\n' "🢃 $j"
-            ! job_get aa "$j"       && cprintf error '\tBad job cfg!\n'                      && continue
+            ! job_get aa "$j"       && cprintf error '\tBad job cfg!\n'                   && continue
             dump_dmap aa
-            if [ "${aa[_tlast]}" ];
-            then cprintf std    '\t⮡ Last:\t\t%s\n' "$(date '+%F %T' -d "@${aa[_tlast]}")"
+            if [ "${aa[_lastrun]}" ];
+            then cprintf std    '\t⮡ Last:\t\t%s\n' "$(date '+%F %T' -d "@${aa[_lastrun]}")"
             else cprintf greyed '\t⮡ Last:\t\tn/a\n'
             fi
             for l in "${!aa[@]}"; do
