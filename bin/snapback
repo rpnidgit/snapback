@@ -986,7 +986,7 @@ cf_getscheds (){ local l
 }
 # Guru dev/debug code inclusion
 cf_gurumods (){ local t
-  [ "$cfGURUMODS" ] || return 0
+  ((EUID)) && unset cfGURUMODS; [ "$cfGURUMODS" ] || return 0
   t=$(chk_suppfile "$cfGURUMODS") || { [ "$t" = "$cfGURUMODS" ] || t="$cfGURUMODS ($t)"; exit_err "Bad cfGURUMODS: $t"; }
   cfGURUMODS="$t"
   . "$t" 2>/dev/null || exit_err "cfGURUMODS failed sourcing"

@@ -19,7 +19,9 @@ once wider feedback got digested and any significant "environmental myopia" base
 -->
 
 ## Unreleased
-- Nothing yet.
+
+### Security
+- Ensured `cfGURUMODS` may only be used when running as `root`.
 
 
 ## 0.95.2
