@@ -2205,7 +2205,7 @@ jc_archive (){ local -i nv r; local m ni v
         if ((nv==1));
         then ni="${ja_[create_name_ident]}"; [ ! "$ni" ] && ni="${ja_[name_ident]}" # "inherit" if not specified
              [ ! "$ni" ]                     && cfgerr "Archive name ident needed for v1 naming" && r=1
-             v="${ja_[name_glob]/"*"/$l}"; v="${v//"*"}"; v="${v//"?"/_}"
+             v="${ja_[name_glob]/"*"/$ni}"; v="${v//"*"}"; v="${v//"?"/_}"
              ja_[_ac_name]="$v" # combined final name, remaining '*' deleted, '?' replaced
              if ((aBORGVN>=200)); then
                v="${ja_[name_glob]//*([.:_~=+-])"*"*([.:_~=+-])}"; v="${v//"?"/_}"
