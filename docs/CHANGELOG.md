@@ -24,6 +24,8 @@ once wider feedback got digested and any significant "environmental myopia" base
 
 ## 0.95.2
 
+*Revoked & re-released 2025-09-13, see [#2][2]*
+
 ### Added
 - New pruning method 'native' as an agnostic alternative to the explicit native ones ('borg'/'snapper').
 - Guru feature: special `cfGURUMODS` for *pre-init* code inclusion.
@@ -42,9 +44,11 @@ once wider feedback got digested and any significant "environmental myopia" base
 ### Fixed
 - `cfCFG` was not properly normalized & checked when given per the environment.
 - Invocation info line did not give the correct unit name.
+- **FATAL** archive naming foulup introduced in `824440a6` ([#2][2]).
 
 
 [1]: https://codeberg.org/rpnid/snapback/issues/1
+[2]: https://codeberg.org/rpnid/snapback/issues/2
 
 
 ## 0.95.1
