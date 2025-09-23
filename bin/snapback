@@ -970,8 +970,12 @@ cf_load (){ local -n rvn_=${1:-aCFGCACHE} yqq_=${2:-cYQ_CFGPREP}; local -i gli=1
 # 2: yq query expression
 # [3..7]: values to pass as P1...5
 cf_query (){ local -i r=0; local qr
-  qr=$(P1="$3" P2="$4" P3="$5" P4="$6" P5="$7" "$cfBIN_YQ" "$2" <<<"$aCFGCACHE" 2>/dev/null) || {
-    error "Cfg query: \"$(P1="$3" P2="$4" P3="$5" P4="$6" P5="$7" "$cfBIN_YQ" "$2" <<<"$aCFGCACHE" 2>&1)\""
+  # Caution: VS Codium gets confused when the following <<< are in the same lines,
+  # incl. no more code completion further down.
+  qr=$(P1="$3" P2="$4" P3="$5" P4="$6" P5="$7" "$cfBIN_YQ" "$2" \
+  <<<"$aCFGCACHE" 2>/dev/null) || {
+    error "Cfg query: \"$(P1="$3" P2="$4" P3="$5" P4="$6" P5="$7" "$cfBIN_YQ" "$2" \
+      <<<"$aCFGCACHE" 2>&1)\""
     qr=""; r=1
   }
   [ "$qr" == "null" ] && qr=""
