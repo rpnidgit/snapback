@@ -1155,6 +1155,8 @@ snapper_getnames (){ local -a ia; local l; aSNM=()
   for l in "${ia[@]}"; do [ "${aSNM[${l#*|}]+set}" ] || aSNM[${l#*|}]="${l%|*}"; done
   :
 }
+# Get (snapper) snapshot number from subvol path $1 ([*snapshots/]<num>[/*])
+snapper_getpathnum (){ local t=${1#*snapshots/}; t=${t%%/*}; [ "$t" ] && [ ! "${t//[0-9]}" ] && echo "$t"; }
 
 ##############################################################################
 # %General Processing
@@ -2028,12 +2030,11 @@ node_get_pass (){ local p
 # [4]: last n only, defaults to 999
 node_get_snaps (){ local -n ra_=$1; local -a ia; local sn st l k v
   local -r c="description,date,number,read-only,default,active,user,cleanup"
-  # Get btrfs default as snapshot number (defensively)
-  # 1: path (to filter non-/)
-  _snaps_getdefnum (){ local t
-    [ "$1" = "/" ] && dowehave btrfs && t=$(btrfs su get-def / 2>/dev/null)
-    t=${t%/*}; t=${t##*/}  # we always get "<mnt>/<num>/snapshot" at the (path) end
-    [ ! "${t//[0-9]}" ] && echo "$t"
+  # Add flag $2 to snapshot num $1
+  _snap_addflag (){ local k
+    for (( k=0; k < l; k++ )); do
+      if [ "${ra_[$k|num]}" = "$1" ]; then [[ ${ra_[$k|flags]} != *"$2"* ]] && ra_[$k|flags]+="$2 "; break; fi
+    done
   }
   sn="${gNDC[$2|_scfg]}"
   case $3 in
@@ -2060,19 +2061,17 @@ node_get_snaps (){ local -n ra_=$1; local -a ia; local sn st l k v
     ra_[$k]="$v"
   done
   if [ "${ra_[_len]}" ]; then l=$((++ra_[_len]))
-    # Merge in default acc. to btrfs-progs, as snapper may not have given it!
-    # Done here to not spread gathering of infos all over
-    if [ "${gNDC[$2|path]}" = "/" ] && v=$(_snaps_getdefnum /) && [ "$v" ]; then
-      for (( k=0; k < l; k++ )); do
-        if [ "${ra_[$k|num]}" = "$v" ]; then [[ ${ra_[$k|flags]} != *default* ]] && ra_[$k|flags]+="default "; break; fi
-      done
+    # try to add flags that snapper may not have given
+    if [ "${gNDC[$2|path]}" = "/" ]; then
+      dowehave btrfs && v=$(btrfs su get-def / 2>/dev/null) && v=$(snapper_getpathnum "$v") && _snap_addflag "$v" default
     fi
+    v=$(snapper_getpathnum "${gNDC[$2|_svol]}") && _snap_addflag "$v" active  # from curr. subvol, and NOT just for /
   else ra_[_len]=0
   fi
   :
 }
 # Get a single snapshot attrib
-# 1:   node name (MUST be a snapped node)
+# 1:   node name (MUST be snapped and cached)
 # 2:   snapshot num
 # 3:   snapper attrib name
 node_get_snapattr (){ local -a ia; local sn="${gNDC[$1|_scfg]}"

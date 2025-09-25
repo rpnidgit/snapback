@@ -20,7 +20,13 @@ once wider feedback got digested and any significant "environmental myopia" base
 
 
 ## Unreleased
-- Nothing yet.
+
+### Added
+- *Active* snaphots are now also detected in alternative fashion, not relying on *Snapper* to properly indicate them.
+
+### Changed
+- Streamlined the `btrfs` based alternative (not relying on *Snapper*) *default* snapshot detection.
+- (internal) Reformatted some code that kept confusing VS Codium.
 
 
 ## 0.95.3
