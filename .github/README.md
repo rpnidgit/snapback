@@ -40,7 +40,7 @@ A versatile, flexibly configurable wrapper & automation tool for<br/>
   - [*BorgBackup*](https://www.borgbackup.org/) v1.2.4 or later, 1.2.6+ recommended, [see notes](#borgbackup-v2-notes) for v2
 - *for snapshots:*
   - [*Snapper*](https://github.com/openSUSE/snapper)
-  - recommended: `btrfs` utility &nbsp;&nbsp;<sub><sup><code>◀deb:btrfs-progs</code></sup></sub>
+  - recommended ([see notes](#a-util-notes)): `btrfs` utility &nbsp;&nbsp;<sub><sup><code>◀deb:btrfs-progs</code></sup></sub>
 - *for desktop notifications:*
   - D-Bus environment
   - `notify-send` utility &nbsp;&nbsp;<sub><sup><code>◀deb:libnotify-bin</code></sup></sub>
@@ -68,6 +68,12 @@ you need to find a compatible replacement for `systemd-analyze calendar`.
 ## [Changelog 🞂](../docs/CHANGELOG.md)
 
 ## Special Notes
+
+### <a id="a-util-notes"></a>`btrfs` Utility
+
+When this is present, *SnapBack* does not have to rely on *Snapper* all too much, and can avoid some troubles.  
+E.g. the common *Snapper* OBS builds for Debian lack *rollback* support, and do thus **not** indicate if a snapshot is a *default* one,
+which may result in pruning failures.
 
 ### *BorgBackup* v2 Notes
 
