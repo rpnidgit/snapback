@@ -22,7 +22,10 @@ once wider feedback got digested and any significant "environmental myopia" base
 ## Unreleased
 
 ### Added
-- *Active* snaphots are now also detected in alternative fashion, not relying on *Snapper* to properly indicate them.
+- *Active* snapshots are now also detected in alternative fashion, not relying on *Snapper* to properly indicate them,
+and not limited to system root ones.
+- When the `btrfs` utility is present, snapshots that are currently mounted anywhere (not just at their std. targets)
+are now identified and treated like *active* ones, and skipped from deletion in custom prunings.
 
 ### Changed
 - Streamlined the `btrfs` based alternative (not relying on *Snapper*) *default* snapshot detection.

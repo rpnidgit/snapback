@@ -1263,8 +1263,8 @@ on_exit (){ local -i c r; local f t # localize to have clean vars
     if get_cpids cpa; then snore 1; get_cpids cpa && kill -TERM "${cpa[@]}" 2>/dev/null; fi # SIGTERM remaining childs after 1s
     clr_bmnts error; c=$?  # clear ANY still present bmounts
     for t in "${xTMPSNAPS[@]}"; do
-      ! run_snapper - "${t#*|}" -q delete "${t%%|*}" >/dev/null && \
-        error "Could not delete temp. snapshot #${t%%|*} for snapper cfg '${t#*|}'" && c=1
+      ! run_snapper - "${t#*|}" -q delete "${t%%|*}" >/dev/null \
+      && error "Could not delete temp. snapshot #${t%%|*} for snapper cfg '${t#*|}'" && c=1
     done
     for t in "${!xSNAPLOCKS[@]}"; do
       ((xSNAPLOCKS[$t])) && ! node_snaplocks_clr "$t" silent && error "Could not unlock snapshot(s) for node '$t'" && c=1
@@ -1369,10 +1369,10 @@ clean_ipc (){ [ ! -d "$xIPCDIR" ] || { [[ "$xIPCDIR" = "/run/$aMYNAME"* ]] && rm
 
 # Generic ipc locks, $1: name, [$2]: num_retries (1/s) for setting, F)orced flag for clearing
 set_lock (){ local l="$xIPCDIR/$1.lock" n="${2:-1}" p
-  [ -w "$xIPCDIR" ] && until { ln -s "$aPID" "$l" 2>/dev/null && p="$aPID"; } || \
-                             { p=$(realpath "$l" 2>/dev/null) && p="${p##*/}" && [ "$p" = "$aPID" ]; } || \
-                             ! ((n--)); do snore 1
-                       done
+  [ -w "$xIPCDIR" ] && until { ln -s "$aPID" "$l" 2>/dev/null && p="$aPID"; } \
+                       || { p=$(realpath "$l" 2>/dev/null) && p="${p##*/}" && [ "$p" = "$aPID" ]; } \
+                       || ! ((n--));
+                       do snore 1; done
   [ "$p" = "$aPID" ]
 }
 clr_lock (){ local l="$xIPCDIR/$1.lock" p
@@ -1649,8 +1649,8 @@ ccf_parse (){ local -n ca_=$1 st_=$5; local r mc="$4" nc="$6" pb="$7"; local -i 
       ((pb))                  && st_="P SEQ REFS$sr"  && return 0   # pushback
       r="$sr";                                           id=SEQ
     elif _ccf_issgr  "$2"; then  r="$2";                 id=SGR     # Full SGR cmd(s)
-      [[ ! "$2" =~ ^(($'\e'|\\e)\[[0-9\;]*m)+$ ]] && \
-                                 st_="E SGR BAD:'$2'" && return 1
+      [[ ! "$2" =~ ^(($'\e'|\\e)\[[0-9\;]*m)+$ ]] \
+                              && st_="E SGR BAD:'$2'" && return 1
       _ccf_okmax  256 "$2" "38\;5\;"                  || return 1
       _ccf_okmax  257 "$2" "38\;2\;"                  || return 1
     elif _ccf_ishex  "$2"; then  r=$(ccf_hexsgr "$2");   id=HEX     # Hex value ...
@@ -1854,8 +1854,8 @@ sysd_upd_dropin (){ local -a la; local -i ci; local cs df ds dp l
   if ((ci)); then
     ds="${df%# ---x---*}"
     xvmsg T "🢃 Timer dropin pre marker"  && dump_out "$ds" data
-    [[ "$ds" =~ $'\n'"On"(Calendar|(Active|Boot|Startup|UnitActive|UnitInactive)Sec)=([[:space:]]*)($'\n'|$) ]] || \
-      warn "Timer dropin contains no clearing 'On*=' statement!"
+    [[ "$ds" =~ $'\n'"On"(Calendar|(Active|Boot|Startup|UnitActive|UnitInactive)Sec)=([[:space:]]*)($'\n'|$) ]] \
+    || warn "Timer dropin contains no clearing 'On*=' statement!"
     ds="${df##*# ---x---+([$'\n\t' ])}"
     xvmsg T "🢃 Timer dropin post marker" && dump_out "$ds" data
     [ "$1" ] || ds="${ds//#}" # allows commenting of single entries w/o triggering update unless standalone
@@ -1885,10 +1885,10 @@ OnCalendar=2063-04-05
 }
 # Suppress redundant timer triggers, incl. persistent ones
 sysd_calm_timer (){ { local s="/var/lib/systemd/timers/stamp-$TRIGGER_UNIT"
-  ((aSYSTEMD)) && [ "$TRIGGER_UNIT" ] && dowehave systemctl; }             || return 0 # nothing to do
+  ((aSYSTEMD)) && [ "$TRIGGER_UNIT" ] && dowehave systemctl; }                 || return 0 # nothing to do
   # don't calm transient ones, saving the lookup for explicitely configured ones
-  [ "${TRIGGER_UNIT%.timer}" = "${cfSYSTEMD_TIMER_NAME%.timer}" ] || \
-  [[ "$(systemctl show "$TRIGGER_UNIT" -p Transient 2>/dev/null)" = *no ]] || return 0
+  [ "${TRIGGER_UNIT%.timer}" = "${cfSYSTEMD_TIMER_NAME%.timer}" ] \
+  || [[ "$(systemctl show "$TRIGGER_UNIT" -p Transient 2>/dev/null)" = *no ]]  || return 0
   xvmsg T "Calming timer reactivations"
   [ -f "$s" ] && touch "$s" &>/dev/null # for persistent ones
   ! systemctl restart "$TRIGGER_UNIT" &>/dev/null && error "Error restarting $TRIGGER_UNIT" && return 1
@@ -2123,8 +2123,8 @@ node_amnt (){ local -i a=$((gNDC[$1|automount])) r=0; local bn="${gNDC[$1|base]}
                       # register for unmounting BEFOREHAND to avoid interruption troubles
                       # using an ipc regfile to be coprocable
                       echo "$p" >"$xIPCDIR/$pf"
-                      mount "$p" &>/dev/null && node_get_fsdata "$1" U && [ "${gNDC[$1|_mnt]}" = "mounted" ] || \
-                        { r=1; rm -f "$xIPCDIR/$pf" 2>/dev/null; }
+                      mount "$p" &>/dev/null && node_get_fsdata "$1" U && [ "${gNDC[$1|_mnt]}" = "mounted" ] \
+                      || { r=1; rm -f "$xIPCDIR/$pf" 2>/dev/null; }
                     else r=1; fi;;
            unknown) r=1;;
   esac
@@ -2201,13 +2201,13 @@ jc_archive (){ local -i nv r; local m ni v
       ;;
   f*) [ "${ja_[name]}" ] && nv=2 || nv=1; xvmsg J "Using v$nv archive naming"
       if ((nv==1));
-        then [ ! "${ja_[name_glob]}" ]       && cfgerr "Archive name glob needed for v1 naming"  && r=1
+        then [ ! "${ja_[name_glob]}" ]        && cfgerr "Archive name glob needed for v1 naming"  && r=1
         else unset "ja_[name_glob]"; unset "ja_[name_ident]"; unset "ja_[create_name_ident]"
       fi
       if ((ja_[_do_create])); then
         if ((nv==1));
         then ni="${ja_[create_name_ident]}"; [ ! "$ni" ] && ni="${ja_[name_ident]}" # "inherit" if not specified
-             [ ! "$ni" ]                     && cfgerr "Archive name ident needed for v1 naming" && r=1
+             [ ! "$ni" ]                      && cfgerr "Archive name ident needed for v1 naming" && r=1
              v="${ja_[name_glob]/"*"/$ni}"; v="${v//"*"}"; v="${v//"?"/_}"
              ja_[_ac_name]="$v" # combined final name, remaining '*' deleted, '?' replaced
              if ((aBORGVN>=200)); then
@@ -2217,13 +2217,13 @@ jc_archive (){ local -i nv r; local m ni v
         else ja_[_ac_name]="${ja_[name]}"
         fi
         ((ja_[create_snap_useown])) && ! chk_varclass "${ja_[create_snap_snaptag]}" safetag \
-                                         && cfgerr "Plain snaptag needed for snapshot creation!" && r=1
+                                          && cfgerr "Plain snaptag needed for snapshot creation!" && r=1
       fi
       if ((ja_[_do_prune])); then m="${ja_[prune_method]}"
         ((nv==1)) && ja_[_ap_filt]="${ja_[name_glob]}" || ja_[_ap_filt]="${ja_[name]}"
-        case $m in native|borg) [ "${ja_[prune_keep_quarterly]}" ] && ((aBORGVN<141)) && \
-                                  cfgerr "Method '$m' needs Borg v1.4.1+ for 'quarterly' keeps!" && r=1;;
-                             *) prune_methfix m && ja_[prune_method]="$m"                        || r=1;;
+        case $m in native|borg) [ "${ja_[prune_keep_quarterly]}" ] && ((aBORGVN<141)) \
+                                && cfgerr "Method '$m' needs Borg v1.4.1+ for 'quarterly' keeps!" && r=1;;
+                             *) prune_methfix m && ja_[prune_method]="$m"                         || r=1;;
         esac
       fi
       ;;
@@ -2964,7 +2964,7 @@ _jh_snapshot_create (){ local -a args; local -i r=0; local buf
   ((!r))
 }
 _jh_snapshot_prune (){ local -A ptbl; local -a prul psel
-                       local -i i k v n r=0 s=0; local pm="${ja_[prune_method]}" it
+                       local -i i k v n r=0 s=0; local pm="${ja_[prune_method]}" it t
   inopts S && inopts P && msg "method=$pm" --SP
   n=1
   if [ "$pm" = "snapper" ] || [ "$pm" = "native" ]; then info "Pruning natively with snapper"
@@ -2985,6 +2985,10 @@ _jh_snapshot_prune (){ local -A ptbl; local -a prul psel
         for ((i=n-1; i>=0; i--)); do k=${psel[$i]}; v=${ptbl[$k|num]}; s=0 # oldest first!!
           inopts S && timer_start ITEM
           [[ "${ptbl[$k|flags]}" =~ (def)|(act) ]] && info "keeping #$v: default or active" && continue
+          dowehave btrfs \
+          && t=$(btrfs inspect-internal rootid "${gNDC[$node|path]%/}/.snapshots/$v/snapshot" 2>/dev/null) \
+          && t=$(findmnt -nlt btrfs -o TARGET -O subvolid="$t" 2>/dev/null) \
+          && [ "$t" ]                              && info "keeping #$v: mounted ($t)"      && continue
           if ((!cfDRYRUN)); then
             run_snapper log "${gNDC[$node|_scfg]}" delete "$v" || s=$? # we'll nevertheless continue the loop!
           fi
@@ -3418,8 +3422,8 @@ cmd_show (){ local -A aa; local -a ia ja; local buf e j l s t spca spcb
           ;;
     # notification
     not*) unset "cfNOTIFY_NOTTYMUTE" # we never want this when testing notifications!
-          [ ! "$cfNOTIFY_DBUS_USER" ] && [ ! "$cfNOTIFY_DBUS_ADDR" ] && [ ! "$cfNOTIFY_CUSTOM_COMMAND" ] && \
-            exit_err "No notification means configured!" "$cERR_CFG"
+          [ ! "$cfNOTIFY_DBUS_USER" ] && [ ! "$cfNOTIFY_DBUS_ADDR" ] && [ ! "$cfNOTIFY_CUSTOM_COMMAND" ] \
+          && exit_err "No notification means configured!" "$cERR_CFG"
           if [ "$2" ];
             then info "Sending notification"; notify log "$2" "$3" "exit_reason: FIN\nerrors: 0\nwarnings: 0\n"
             else info "Sending default test notification"
