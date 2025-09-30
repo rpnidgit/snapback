@@ -3243,7 +3243,7 @@ cmd_reset (){ local k t
   clean_late # not requiring the .cln semaphore here
 }
 cmd_run (){ local -a args; local os q t
-  _runat_prep (){
+  _runat_prep (){ local t
     #xRUNAT="$1"
     tRUNATSEC=$(tsdate "$1") || return 1
     #tRUNATISO=$(date '+%F %T' -d "@$tRUNATSEC")
@@ -3251,7 +3251,8 @@ cmd_run (){ local -a args; local os q t
     if ((tRUNATSEC < 0)); then [ "${*,,}" = "now" ] && tRUNATSEC=0 || return 1; fi
     xRUNARGS=("--on-active=$tRUNATSEC" "--timer-property=AccuracySec=1s" "--working-directory=$xIWD")
     # temp. go back to IWD to cope with relative invocations
-    pushd "$xIWD" &>/dev/null && xRUNARGS+=("$(realpath "$0" 2>/dev/null)") && popd &>/dev/null || exit_err "OOPS prepping for 'at'"
+    pushd "$xIWD" &>/dev/null && t=("$(realpath "$0" 2>/dev/null)") && popd &>/dev/null || exit_err "OOPS prepping for 'at'"
+    xRUNARGS+=("$t")
     shift; while (($#)); do case $1 in --);; --at)shift;; *)xRUNARGS+=("$1");; esac; shift; done
   }
   chk_conffile
