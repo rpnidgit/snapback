@@ -1045,6 +1045,7 @@ chk_workdirs (){
     chk_safepath "$cfMOUNTDIR"             || exit_err "Cannot use '$cfMOUNTDIR' as mountdir!" "$cERR_CFG"
     mkdir -p "$cfMOUNTDIR" &>/dev/null     || exit_err "Could not assure mountdir!"
   fi
+  mkdir -p "$cfSTATEDIR/alast" &>/dev/null && \
   mkdir -p "$cfSTATEDIR/jlast" &>/dev/null || exit_err "Could not assure statedir!"
 }
 
@@ -2007,14 +2008,17 @@ node_get_archs (){ local -n ra_=$1; local -a ia; local buf l k v r=0
   fi
   :
 }
-# Get timestamp of most recent archive at node $2 globbed/filtered $3 into var $1
-node_get_lat (){ local -n lt_=$1; local -A aa; local m t
-  node_get_archs aa "$2" "$3" 1 || return 1
-  ((aa[_len])) && t="${aa[0|time]}" && lt_=$(tsdate "$t") || lt_=0
-  if inopts A; then
-    ((lt_)) && m="$t" || m="(no match)"
-    msg "Last archived: $m" ---A
+# Get timestamp of most recent archive of node $2 at node $3 globbed/filtered $4 into var $1, using 'alast' as cache
+node_get_lat (){ local -n lt_=$1; local -A aa; local cfn="$cfSTATEDIR/alast/$2.$3.$4" m t
+  if t=$(date '+%F %T' -r "$cfn" 2>/dev/null);
+  then m=" (from cache)"; cfn="" # clear to suppress re-touching
+  else node_get_archs aa "$3" "$4" 1 || return 1
+       ((aa[_len])) && t="${aa[0|time]}"
   fi
+  [ "$t" ]   && lt_=$(tsdate "$t") || lt_=0
+  [ "$cfn" ] && touch -d "@$lt_" "$cfn" &>/dev/null
+  if inopts A; then ((lt_)) && m="$t$m" || m="(no match)$m"; msg "Last archived: $m" ---A; fi
+  :
 }
 # Get mangled repo_pass* for node $1
 # NOT done right in node_get() to avoid confusing "show node" output and quirking the "[hidden]" stuff
@@ -2772,12 +2776,12 @@ jh_archive (){ local -n ja_=$1;
                  [SVOL]="${gNDC[$node|_svol]:-_}"    [SVID]="${gNDC[$node|_svid]:-_}"
                  [TNOW]="_"  [SNUM]="_"  [STIM]="_"  [TSYN]="_"
                )
-  info "Using repo $rnode"
+               local afilt="$(_jhprepl "${ja_[_ap_filt]}")"
+  info "Using repo $rnode, classifier '$afilt'"
   ((${ja_[_borgbin]})) && info "Using ${aBORGS[${ja_[_borgbin]}|cf]}, v${aBORGS[${ja_[_borgbin]}|vs]}"
   _jhtw archive A
 }
-_jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0; local snode tfmt k v it
-  ((aBORGVN<200)) && tfmt="+%FT%T" || tfmt="+%FT%T+00:00"
+_jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0; local snode k v it t
   # get the snapped node - if applicable
   [ "${gNDC[$node|_scfg]}" ] && snode="$node"
   [ ! "$snode" ] && v="${gNDC[$node|base]}" && [ "$v" ] && [ "${gNDC[$v|_scfg]}" ] && snode="$v"
@@ -2822,8 +2826,9 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
     while :; do [ "$t" ] && args+=("$2" "$t"); t="${ja_[${1}_$((++i))]}"; [ "$t" ] || return 0; done
   }
   # Run borg incl. bind mount wrapping & prefixing stuff
-  # 1:node, 2:snapshot num (0-alike for classic path), 3+ extra args (not in $args & w/o archive name & path)
-  _arwrap (){ local a=$(_jhprepl "${ja_[_ac_name]}") adir mp t; local -i r=0
+  # 1:node, 2:snapshot num (0-alike for classic path), 3:archive timestamp, 4+ extra args (not in $args & w/o archive name & path)
+  _arwrap (){ local a=$(_jhprepl "${ja_[_ac_name]}") adir mp t tfmt; local -i r=0
+    ((aBORGVN<200)) && tfmt="+%FT%T" || tfmt="+%FT%T+00:00"
     if [ "${ja_[_ac_suff]}" ]; then
       t=$(_jhprepl "${ja_[_ac_suff]}")
       xvmsg A "⮡ Using cache suffix '$t'"
@@ -2832,12 +2837,15 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
     (($2)) && t=" #$2" || t=" path"
     ((aBORGVN<200)) && a="::$a"
     info "Creating $a from $1$t"
-    ! node_bmnt "$1" "$2" adir "${ja_[create_prefix]}"      && error "Could not prep or bind $1$t" && r=1
-    ((!r)) && ! cd "$adir"                                  && error "Could not cd to $adir"       && r=1 # borg v1.2.x needs cd!
-    ((!r)) && ! run_borg log "${args[@]}" "${@:3}" "$a" . && r=1
-    ((!r)) && info  "• Created ok"
+    ! node_bmnt "$1" "$2" adir "${ja_[create_prefix]}" && error "Could not prep or bind $1$t" && r=1
+    ((!r)) && ! cd "$adir"                             && error "Could not cd to $adir"       && r=1 # borg v1.2.x needs cd!
+    ((!r)) && ! run_borg log "${args[@]}" --timestamp "$(date -u "$tfmt" -d "@$3" 2>/dev/null)" "${@:4}" "$a" . && r=1
+    ((!r)) && {
+      ((cfDRYRUN)) || touch -d "@$3" "$cfSTATEDIR/alast/$node.$rnode.$afilt" &>/dev/null
+      info  "• Created ok"
+    }
     cd "$cfETCDIR"
-    ! node_bmnts_clr "$1"                                   && warn  "Could not clear bind mount(s) for $1"
+    ! node_bmnts_clr "$1"                              && warn  "Could not clear bind mount(s) for $1"
     ((!r))
   }
   # shellcheck disable=SC2206
@@ -2863,29 +2871,29 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
   #FIXME: ?? move comment & cmdopts (as overrides) into wrapper to expand more placeholders in comment?
   [ "${ja_[create_comment]}" ]          && args+=(--comment "$(_jhprepl "${ja_[create_comment]}")")
   [ "${ja_[create_borg_cmdopts]}" ]     && args+=("${ja_[create_borg_cmdopts]}")
-  ((!r)) && node_get_lat lat "$rnode" "$(_jhprepl "${ja_[_ap_filt]}")" || r=1
+  ((!r)) && node_get_lat lat "$node" "$rnode" "$afilt" || r=1
   if ((!r)); then
-    if [ ! "$snode" ]; then info "Using path"
-      t=$(date "${ja_[create_time_fmt]}" 2>/dev/null)
-      repl[TNOW]="$t"; repl[STIM]="$t"; repl[TSYN]="$t"
-      _arwrap "$node" 0 || r=1
+    if [ ! "$snode" ]; then info "Archiving from path"
+      t=$(date "+%s" 2>/dev/null); v=$(date "${ja_[create_time_fmt]}" -d "@$t" 2>/dev/null)
+      repl[TNOW]="$v"; repl[STIM]="$v"; repl[TSYN]="$v"
+      _arwrap "$node" 0 "$t" || r=1
     else
       repl[SNAM]="${gNDC[$snode|_scfg]}"
-      if ((ja_[create_snap_useown])); then info "Using own '${ja_[create_snap_snaptag]}' snapshot"
+      if ((ja_[create_snap_useown])); then info "Archiving from own '${ja_[create_snap_snaptag]}' snapshot"
         _asnew asns "${ja_[create_snap_snaptag]}" "${ja_[create_snap_keepown]}" || r=1
-      else info "Using '${ja_[create_snap_snaptag]}' snapshots"
+      else info "Archiving from '${ja_[create_snap_snaptag]}' snapshots"
         _assel asns "$lat" "${ja_[create_snap_snaptag]}" \
           "${ja_[create_snap_maxchk]:-12}" "${ja_[create_snap_maxnum]:-1}"      || r=1
       fi
       n=${#asns[@]} && ((!n)) && info "Nothing to do" || info "$n snapshot(s) to archive"
       for ((i=n-1; i>=0 && r==0; i--)); do # oldest first
         inopts A && timer_start ITEM
-        v="${asns[$i]}"; j="${v%|*}"
+        v="${asns[$i]}"; j="${v%|*}"; v="${v#*|}"
         repl[TNOW]=$(date "${ja_[create_time_fmt]}" 2>/dev/null)
         repl[SNUM]="$j"
-        repl[STIM]=$(date "${ja_[create_time_fmt]}" -d "@${v#*|}" 2>/dev/null)
+        repl[STIM]=$(date "${ja_[create_time_fmt]}" -d "@$v" 2>/dev/null)
         repl[TSYN]="${repl[STIM]}"
-        _arwrap "$node" "$j" --timestamp "$(date -u "$tfmt" -d "@${v#*|}" 2>/dev/null)" || r=1
+        _arwrap "$node" "$j" "$v" || r=1
         inopts A && timer_time ITEM it && msg "⮡ time: ${it}s" ---A
       done
       if ((n)); then
@@ -2913,9 +2921,9 @@ _jh_archive_prune (){ local -A ptbl; local -a args=("${rba[@]}") prul psel
       done
       # shellcheck disable=SC2206
       [ "${ja_[prune_borg_cmdopts]}" ]   && args+=(${ja_[prune_borg_cmdopts]})
-      run_borg log "${args[@]}" -a "$(_jhprepl "${ja_[_ap_filt]}")" || r=$?
+      run_borg log "${args[@]}" -a "$afilt" || r=$?
     else info "Pruning ${pm#*|}"
-      node_get_archs ptbl "$rnode" "$(_jhprepl "${ja_[_ap_filt]}")" 999 && prune_select psel ptbl prul "${pm%%|*}"
+      node_get_archs ptbl "$rnode" "$afilt" 999 && prune_select psel ptbl prul "${pm%%|*}"
       n=${#psel[@]}
       if inopts A && inopts P; then
         msg "🢃 Candidates" --AP
@@ -3219,6 +3227,7 @@ cmd_reset (){ local k t
              date -d "$t" &>/dev/null || exit_err "Bad date/time specifier: '$t'" "$cERR_CMD"
              if ((${#cfSTATEDIR} > 5)); then # Extra check, then delete per dir
                rm -f "$cfSTATEDIR"/*        &>/dev/null    # std. state files
+               rm -f "$cfSTATEDIR"/alast/*  &>/dev/null    # last archived marks
                rm -f "$cfSTATEDIR"/jlast/*  &>/dev/null    # per_job lastruns
              fi
              # and recreate schedule lastruns

@@ -24,12 +24,19 @@ once wider feedback got digested and any significant "environmental myopia" base
 ### Added
 - *Active* snapshots are now also detected in alternative fashion, not relying on *Snapper* to properly indicate them,
 and not limited to system root ones.
-- When the `btrfs` utility is present, snapshots that are currently mounted anywhere (not just at their std. targets)
-are now identified and treated like *active* ones, and skipped from deletion in custom prunings.
+- When the `btrfs` utility is present, snapshots mounted anywhere (not just at their std. targets)
+are now identified and treated like *active* ones, i.e. skipped from deletion in custom prunings.
+- The `statedir` got an additional `alast` subdir, to buffer *last archived* info, primarily for planned use by other
+jobs than the archiving one(s).
 
 ### Changed
-- Streamlined the `btrfs` based alternative (not relying on *Snapper*) *default* snapshot detection.
+- Archiving now populates and uses the new `alast` (see above) as a *last archived* cache.
+- (internal) Streamlined the `btrfs` based alternative (not relying on *Snapper*) *default* snapshot detection.
 - (internal) Reformatted some code that kept confusing VS Codium.
+- (internal) Streamlined some of the archiving handler's details.
+
+### Fixed
+- When archiving from "classic" paths, archive times were not set to always equal the ones indicated per (our) naming placeholders.
 
 
 ## 0.95.3
