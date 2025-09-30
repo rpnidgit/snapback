@@ -37,7 +37,7 @@ jobs than the archiving one(s).
 
 ### Fixed
 - When archiving from "classic" paths, archive times were not set to always equal the ones indicated per (our) naming placeholders.
-
+- Registering runs via `--at` no longer chokes when invoking via a relative path.
 
 ## 0.95.3
 
