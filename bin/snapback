@@ -86,7 +86,8 @@ cfQUEUE_QOPTS=DE                  # D)ue E)rror N)on-due M)anual *)Any
 cfSNAPSHOT_LOCK_PREFIX="BSY_"
 cfSNAPSHOT_TEMP_PREFIX="TMP_"
 cfSTATEDIR=""                     # NOT to be passed per env!
-#cfGURUMODS=""                     # ONLY per env: opt. dev/debug code file, SOURCED pre init
+#cfALLOW_RESNAP=""                # ONLY per env or cmdline, 0|1
+#cfGURUMODS=""                    # ONLY per env: opt. dev/debug code file, SOURCED pre init
 
 #cfGURU_WARN_WILD_KEY=1           # Warn if a key was found that got only enabled by '*'
 #cfGURU_ALLOW_ANY_KEY=0
@@ -170,7 +171,7 @@ declare -ra cVFLT_GLOBAL=( # no general wildcarding nor custom stuff here!
   'output_colors_custom_*'
   pidlock_maxwaits:nint pidlock_surrender:bool
   queue_qopts queue_lasecs:nint 'queue_*:bool'
-  'snapshot_*:posix'
+  snapshot_df_create_resnap:bool 'snapshot_*:posix'
   'systemd_timer_*:posix' 'systemd_*:bool'
   umask:noct
   'guru_*'
@@ -195,13 +196,13 @@ declare -ra cVFLT_archive=(
   create_exclude_caches:bool create_exclude_tagfile:file create_exclude_tagkeep:bool
   'create_*patternfile:path' 'create_*pattern*:borgpat'
   create_snap_snaptag:inregex  # most general case here, refined later
-  'create_snap_max*:nint' 'create_snap_*own:bool'
+  'create_snap_max*:nint' 'create_snap_*own:bool' create_snap_resnap:bool
   '*time_fmt:file'
   task_order:taskorder
   )
 declare -ra cVFLT_snapshot=(
   snaptag:inregex  # most general case here, refined later
-  create_comment:noquote create_rw:bool
+  create_comment:noquote create_rw:bool create_resnap:bool
   task_order:taskorder
   )
 # Bad chars/stuff to look for, per (own) var classes, leading ! negates the matching
@@ -490,6 +491,7 @@ Run Options overriding Config Settings:
 --[no]perjob    Consider last job completion times when queueing by
                 schedule (*).
 --[no]rescan    Rescan for and run newly due jobs at the end (*).
+--[no]resnap    Create snapshots even from curr. active ones.
 --[no]settimer  Automatically update systemd timer settings according
                 to configured schedules (*).
 --[no]snapfirst Promote snapshing jobs.
@@ -631,7 +633,8 @@ proc_args (){ local -A cfv; local os cmd v
     -l all,stale \
     -l dryrun,at:,nocreate,noprune \
     -l addlast,noaddlast,backlog,nobacklog,cleanall,nocleanall,complast,nocomplast \
-    -l perjob,noperjob,rescan,norescan,settimer,nosettimer,snapfirst,nosnapfirst,surrender,nosurrender \
+    -l perjob,noperjob,rescan,norescan,resnap,noresnap,settimer,nosettimer,snapfirst,nosnapfirst \
+    -l surrender,nosurrender \
     -- "$@" 2>&1);
   then exit_getopterrs "$os"; fi
   eval set -- "$os"
@@ -2197,6 +2200,7 @@ jc_archive (){ local -i nv r; local m ni v
       ja_[create_prefix]="${cfARCHIVE_DF_PREFIX}"
       ja_[create_snap_snaptag]="${cfARCHIVE_DF_SNAPTAG-archive}"
       ja_[create_snap_useown]=1
+      ja_[create_snap_resnap]="${cfSNAPSHOT_DF_CREATE_RESNAP}"
       ja_[prune_method]="${cfARCHIVE_DF_PRUNE_METHOD:-native}"
       [ "${gNDC[$jn|_scfg]}" ] && ja_[_ac_snap]=1 # always snap arch snapped nodes!
       ((!ja_[_ac_snap])) && v="${gNDC[$jn|base]}" && [ "$v" ] && [ "${gNDC[$v|_scfg]}" ] && ja_[_ac_snap]=1
@@ -2220,8 +2224,12 @@ jc_archive (){ local -i nv r; local m ni v
              fi
         else ja_[_ac_name]="${ja_[name]}"
         fi
-        ((ja_[create_snap_useown])) && ! chk_varclass "${ja_[create_snap_snaptag]}" safetag \
+        if ((ja_[create_snap_useown]));
+        then ! chk_varclass "${ja_[create_snap_snaptag]}" safetag \
                                           && cfgerr "Plain snaptag needed for snapshot creation!" && r=1
+             [[ "$cfALLOW_RESNAP" =~ ^0|1$ ]] && { ((cfALLOW_RESNAP)) && ja_[create_snap_resnap]=1 || ja_[create_snap_resnap]=0; }
+        else unset "ja_[create_snap_resnap]"
+        fi
       fi
       if ((ja_[_do_prune])); then m="${ja_[prune_method]}"
         ((nv==1)) && ja_[_ap_filt]="${ja_[name_glob]}" || ja_[_ap_filt]="${ja_[name]}"
@@ -2239,6 +2247,7 @@ jc_snapshot (){ local -i b r; local m s
   p*) [ ! "${gNDC[$jn|_scfg]}" ] && error "Sys ERR: $jn is not a snapper subvolume!" && return 1 # includes "snapper missing"
       ja_[task_order]="${cfSNAPSHOT_DF_TASK_ORDER:-$cDF_TASK_ORDER}"
       ja_[snaptag]="$cfSNAPSHOT_DF_SNAPTAG"
+      ja_[create_resnap]="${cfSNAPSHOT_DF_CREATE_RESNAP}"
       ja_[prune_method]="${cfSNAPSHOT_DF_PRUNE_METHOD:-native}"
       check[create]=1; check[prune]=1
       cfilt+=("${cVFLT_snapshot[@]}")
@@ -2247,6 +2256,7 @@ jc_snapshot (){ local -i b r; local m s
       if ((ja_[_do_create])); then
         ! chk_varclass "$s" safetag && cfgerr "Plain snaptag needed for snapshot creation!"        && r=1
         [ "$s" = "empty-pre-post" ] && cfgerr "Cannot create pre/post snapshots, only prune them!" && r=1
+        [[ "$cfALLOW_RESNAP" =~ ^0|1$ ]] && { ((cfALLOW_RESNAP)) && ja_[create_resnap]=1 || ja_[create_resnap]=0; }
       fi
       if ((ja_[_do_prune]));  then m="${ja_[prune_method]}"
         case $m in native|snapper) [[ " timeline number empty-pre-post " != *" $s "* ]] && b=1;;
@@ -2731,7 +2741,7 @@ prune_select (){ local -n psa_=$1 pca_=$2 pra_=$3; local -i i j l="${pca_[_len]:
 }
 
 ##############################################################################
-# %Class Handlers
+# %Class Handlers & Helpers
 
 # Job Task Wrapper using $1 (job class),  $2 ("A"|"S") and inherited
 # vars to handle task sequence & surrounding infos in simple fashion
@@ -2763,6 +2773,13 @@ _jhtw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK
 }
 # Replace placeholders in $1 acc. to $repl hash
 _jhprepl (){ local k n="$1"; for k in "${!repl[@]}"; do n="${n//"{$k}"/${repl[$k]}}"; done; echo "$n"; }
+# Catch resnaps for node $1 using flag $2
+_jhresnap (){ local s="${gNDC[$1|_svol]}" v
+  snapper_getpathnum "$s" >/dev/null                   || return 0 # not a resnap
+  (($2)) && info "Creating from active snapshot ($s)"  && return 0 # resnap ok
+  [[ "$cfALLOW_RESNAP" =~ ^0|1$ ]] && v=INFO || v=WARN
+  msg "Disabled creating from active snapshots ($s)" "$v"; return 1
+}
 
 # JH: archive handling acc. to job info $1
 jh_archive (){ local -n ja_=$1;
@@ -2791,6 +2808,7 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
   # 3: keep_flag
   _asnew (){ local -n ra_=$1; local -i r=0; local m n t sc="${gNDC[$snode|_scfg]}" sn
     (($3)) || m="temporary "
+    _jhresnap "$snode" "${ja_[create_snap_resnap]}"              || return 0
     ((cfDRYRUN)) && msg "Dryrun disabled snapshot creation" -DRY && return 0
     sn="$cfSNAPSHOT_LOCK_PREFIX$2"; ((!$3)) && sn="$cfSNAPSHOT_TEMP_PREFIX$sn" # tag for actual creation
     n=$(run_snapper - "$sc" -q create -c "$sn" -p) && t=$(node_get_snaptime "$snode" "$n") && t=$(tsdate "$t") || r=1
@@ -2960,6 +2978,7 @@ jh_snapshot (){ local -n ja_=$1
   _jhtw snapshot S
 }
 _jh_snapshot_create (){ local -a args; local -i r=0; local buf
+  _jhresnap "$node" "${ja_[create_resnap]}" || return 0
   args=(-q create -p)
   [ "${ja_[create_comment]}" ] && args+=(-d "${ja_[create_comment]}")
   [ "${ja_[snaptag]}" ]        && args+=(-c "${ja_[snaptag]}")
@@ -3261,7 +3280,8 @@ cmd_run (){ local -a args; local os q t
     -o n \
     -l dryrun,at:,nocreate,noprune \
     -l addlast,noaddlast,backlog,nobacklog,cleanall,nocleanall,complast,nocomplast \
-    -l perjob,noperjob,rescan,norescan,settimer,nosettimer,snapfirst,nosnapfirst,surrender \
+    -l perjob,noperjob,rescan,norescan,resnap,noresnap,settimer,nosettimer,snapfirst \
+    -l nosnapfirst,surrender \
     -- "$@" 2>&1);
   then exit_getopterrs "$os"; fi
   eval set -- "$os"
@@ -3283,11 +3303,13 @@ cmd_run (){ local -a args; local os q t
       --noperjob)     cfQUEUE_NOPERJOB=1    ;;
       --noprune)      cfNOPRUNE=1           ;;
       --norescan)     cfQUEUE_NORESCAN=1    ;;
+      --noresnap)     cfALLOW_RESNAP=0      ;;
       --nosettimer)   cfSYSTEMD_SETTIMER=0  ;;
       --nosnapfirst)  cfQUEUE_SNAPFIRST=0   ;;
       --nosurrender)  cfPIDLOCK_SURRENDER=0 ;;
       --perjob)       cfQUEUE_NOPERJOB=0    ;;
       --rescan)       cfQUEUE_NORESCAN=0    ;;
+      --resnap)       cfALLOW_RESNAP=1      ;;
       --settimer)     cfSYSTEMD_SETTIMER=1  ;;
       --snapfirst)    cfQUEUE_SNAPFIRST=1   ;;
       --surrender)    cfPIDLOCK_SURRENDER=1 ;;
@@ -3304,8 +3326,10 @@ cmd_run (){ local -a args; local os q t
                                  cfQUEUE_NOBACKLOG=1 && cfQUEUE_NORESCAN=1 && cfSYSTEMD_SETTIMER=0 && cfQUEUE_NOPERJOB=1 ;;
     *)  t="$aJQN";        ((!aJQIA[$aJQN|schedule])) && cfQUEUE_NORESCAN=1 && cfSYSTEMD_SETTIMER=0 && cfQUEUE_NOPERJOB=1 ;;
   esac
-  if ((cfDRYRUN)) || inopts C; then
-    msg_chklev info && info "🢃 Run Options" && printf '\tUsing Queue     : %s\n' "$t" && dump_flags cRUNFLAG_INFO
+  if msg_chklev info && { ((cfDRYRUN)) || inopts C; }; then info "🢃 Run Options"
+    printf '\tUsing Queue     : %s\n' "$t"
+    [[ "$cfALLOW_RESNAP" =~ ^0|1$ ]] && { ((cfALLOW_RESNAP)) && t="ALLOWED" || t="DISALLOWED"; printf '\tResnap          : %s\n' "$t"; }
+    dump_flags cRUNFLAG_INFO
   fi
   if ((cfDRYRUN)); then
     [ "$cfOUTPUT_BORG" != "debug" ] && cfOUTPUT_BORG=info

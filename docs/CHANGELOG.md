@@ -24,10 +24,18 @@ once wider feedback got digested and any significant "environmental myopia" base
 ### Added
 - *Active* snapshots are now also detected in alternative fashion, not relying on *Snapper* to properly indicate them,
 and not limited to system root ones.
-- When the `btrfs` utility is present, snapshots mounted anywhere (not just at their std. targets)
-are now identified and treated like *active* ones, i.e. skipped from deletion in custom prunings.
+- When the `btrfs` utility is present, snapshots currently mounted anywhere (not just at their std. targets)
+are now identified and skipped from deletion in custom prunings.
 - The `statedir` got an additional `alast` subdir, to buffer *last archived* info, primarily for planned use by other
 jobs than the archiving one(s).
+- Snapshot creations are now disabled when the subvol (not limited to the system root one) currently is an *active* snapshot,
+i.e. is found to have a snapshot mounted instead of the std. subvol root.  
+When needed, this can be changed  
+  \- per global default, by setting `Global.snapshot.df_create_resnap` to `true` or `1`,  
+  \- per job, by setting the `resnap` attribute to `true` or `1` in its `snapshot.create` (or `archive.create.snap` for `useown` style archiving jobs), or  
+  \- per run, temporarily overriding with `--resnap` or `--noresnap`. or by setting `cfALLOW_RESNAP` to `0` or `1` in the environment.  
+Such cases raise a warning when skipped per a `false` setting. With `true` or when overridden to either mode per the command line or environment,
+they are reported at info level.
 
 ### Changed
 - Archiving now populates and uses the new `alast` (see above) as a *last archived* cache.
