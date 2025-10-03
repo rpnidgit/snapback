@@ -1434,6 +1434,7 @@ snore (){ local IFS
   [[ -n "${_snore_fd:-}" ]] || { exec {_snore_fd}<> <(:) && read -t 0 -ru $_snore_fd; }
   read ${1:+-t "$1"} -ru "$_snore_fd" || :
 }
+# Get epochal for $1
 tsdate (){ date '+%s' -d "$1" 2>/dev/null; }
 # Calc epochal date relative to a given one
 # 1: offset (e.g. "-1 day")
@@ -2012,7 +2013,7 @@ node_get_archs (){ local -n ra_=$1; local -a ia; local buf l k v r=0
   :
 }
 # Get timestamp of most recent archive of node $2 at node $3 globbed/filtered $4 into var $1, using 'alast' as cache
-node_get_lat (){ local -n lt_=$1; local -A aa; local cfn="$cfSTATEDIR/alast/$2.$3.$4" m t
+node_get_alast (){ local -n lt_=$1; local -A aa; local cfn="$cfSTATEDIR/alast/$2.$3.$4" m t
   if t=$(date '+%F %T' -r "$cfn" 2>/dev/null);
   then m=" (from cache)"; cfn="" # clear to suppress re-touching
   else node_get_archs aa "$3" "$4" 1 || return 1
@@ -2022,6 +2023,11 @@ node_get_lat (){ local -n lt_=$1; local -A aa; local cfn="$cfSTATEDIR/alast/$2.$
   [ "$cfn" ] && touch -d "@$lt_" "$cfn" &>/dev/null
   if inopts A; then ((lt_)) && m="$t$m" || m="(no match)$m"; msg "Last archived: $m" ---A; fi
   :
+}
+# Upd alast cache for entry $1 to epochal $2
+node_upd_alast (){ local cfn="$cfSTATEDIR/alast/$1" t
+  t=$(date '+%s' -r "$cfn" 2>/dev/null) || t=0
+  (($2 > t)) && touch -d "@$2" "$cfn" &>/dev/null
 }
 # Get mangled repo_pass* for node $1
 # NOT done right in node_get() to avoid confusing "show node" output and quirking the "[hidden]" stuff
@@ -2798,7 +2804,7 @@ jh_archive (){ local -n ja_=$1;
   ((${ja_[_borgbin]})) && info "Using ${aBORGS[${ja_[_borgbin]}|cf]}, v${aBORGS[${ja_[_borgbin]}|vs]}"
   _jhtw archive A
 }
-_jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0; local snode k v it t
+_jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n alast r=0; local snode k v it t
   # get the snapped node - if applicable
   [ "${gNDC[$node|_scfg]}" ] && snode="$node"
   [ ! "$snode" ] && v="${gNDC[$node|base]}" && [ "$v" ] && [ "${gNDC[$v|_scfg]}" ] && snode="$v"
@@ -2859,7 +2865,7 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
     ((!r)) && ! cd "$adir"                             && error "Could not cd to $adir"       && r=1 # borg v1.2.x needs cd!
     ((!r)) && ! run_borg log "${args[@]}" --timestamp "$(date -u "$tfmt" -d "@$3" 2>/dev/null)" "${@:4}" "$a" . && r=1
     ((!r)) && {
-      ((cfDRYRUN)) || touch -d "@$3" "$cfSTATEDIR/alast/$node.$rnode.$afilt" &>/dev/null
+      ((cfDRYRUN)) || node_upd_alast "$node.$rnode.$afilt" "$3"
       info  "• Created ok"
     }
     cd "$cfETCDIR"
@@ -2889,7 +2895,7 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
   #FIXME: ?? move comment & cmdopts (as overrides) into wrapper to expand more placeholders in comment?
   [ "${ja_[create_comment]}" ]          && args+=(--comment "$(_jhprepl "${ja_[create_comment]}")")
   [ "${ja_[create_borg_cmdopts]}" ]     && args+=("${ja_[create_borg_cmdopts]}")
-  ((!r)) && node_get_lat lat "$node" "$rnode" "$afilt" || r=1
+  ((!r)) && node_get_alast alast "$node" "$rnode" "$afilt" || r=1
   if ((!r)); then
     if [ ! "$snode" ]; then info "Archiving from path"
       t=$(date "+%s" 2>/dev/null); v=$(date "${ja_[create_time_fmt]}" -d "@$t" 2>/dev/null)
@@ -2900,7 +2906,7 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n lat r=0;
       if ((ja_[create_snap_useown])); then info "Archiving from own '${ja_[create_snap_snaptag]}' snapshot"
         _asnew asns "${ja_[create_snap_snaptag]}" "${ja_[create_snap_keepown]}" || r=1
       else info "Archiving from '${ja_[create_snap_snaptag]}' snapshots"
-        _assel asns "$lat" "${ja_[create_snap_snaptag]}" \
+        _assel asns "$alast" "${ja_[create_snap_snaptag]}" \
           "${ja_[create_snap_maxchk]:-12}" "${ja_[create_snap_maxnum]:-1}"      || r=1
       fi
       n=${#asns[@]} && ((!n)) && info "Nothing to do" || info "$n snapshot(s) to archive"
