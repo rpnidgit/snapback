@@ -288,6 +288,12 @@ declare -rA cYQ_QUERY=(
     $a=$a+[[(path|.[1:4]|join(".")),key,.]]|$a|.[]|(.0 +"|"+.1 +"|"+.2)'
   # get elem list for list P1
   [listdata]='.Lists[strenv(P1)]|.[]|select(kind=="scalar" and length!=0)'
+  # get all repos that node P1 is archived to
+  [reposbynode]='.a=[]|.a as $a|.Nodes[strenv(P1)].archive //{}|.[]|select(.disabled!=true and has("schedule") and has("create"))|
+    select((.create|kind!="scalar" and .create.disabled!=true) or (.create|length==0))|
+    with(.schedule;select(kind=="scalar")|.|={"@":.})|
+    select(.schedule.*|select(kind=="scalar" and length!=0 and .!="disabled"))|
+    $a=$a+[.repo]|$a|unique|.[]'
   # get sorted qn list for qnglob P1, with jc filter P2
   [schednames]='.a=[]|.a as $a|.Nodes.* //{}|pick(env(P2))|.*[]|select(.disabled!=true and has("schedule"))|
     with(.schedule;select(kind=="scalar")|.|={"@":.})|
@@ -313,6 +319,7 @@ declare -A aBORGS aCCF_CUSTOM aCOLORS aJQIA aSNM
 
 declare -a gJQA gJPQ  # base job queue & effective job processing queue
 declare -A gNDC       # node data cache
+declare -i tLASTSNAP  # epochal marker for snapshot creations
 
 declare    aYQVN      # yq version (dec Mmms)
 declare    aBORGCMD aBORGVN aMSGPRE # global auto-defaults, may be locally overridden
@@ -1346,6 +1353,7 @@ chk_pidlock (){ local -i i; local p pfd="/run/$aMYNAME"; local pfn="$pfd/${aMYNA
         if ((p != $$)); then
           ((cfPIDLOCK_SURRENDER)) && { info "Could not PID-lock"; exit 0; } || exit_err "Could not PID-lock" "$cERR_PIDLOCK"
         fi
+        tLASTSNAP=$EPOCHSECONDS # init mark along
         xvmsg X "⮡ now locked by me"; :
         ;;
      C) xvmsg X "PID Lock: Clear demanded"
@@ -1434,6 +1442,8 @@ snore (){ local IFS
   [[ -n "${_snore_fd:-}" ]] || { exec {_snore_fd}<> <(:) && read -t 0 -ru $_snore_fd; }
   read ${1:+-t "$1"} -ru "$_snore_fd" || :
 }
+# Snore until at least 1s has passed since epochal $1
+snore_step (){ while ((EPOCHSECONDS<=$1)); do xvmsg X "waiting for next epochal..."; snore 0.2; done; }
 # Get epochal for $1
 tsdate (){ date '+%s' -d "$1" 2>/dev/null; }
 # Calc epochal date relative to a given one
@@ -2035,6 +2045,11 @@ node_get_pass (){ local p
   [ "${gNDC[$1|repo_passcommand]}" ] && p="C:${gNDC[$1|repo_passcommand]}"
   [ "${gNDC[$1|repo_passphrase]}" ]  && p="P:${gNDC[$1|repo_passphrase]}"
   echo "${p:-P:}"
+}
+# Get all repos node $2 is archived to into ary $1
+node_get_repos (){ local -n ra_=$1
+  readarray -t ra_ < <(cfq - reposbynode "$2"); [ "${ra_[0]}" ] || ra_=()
+  ((${#ra_[@]}))
 }
 # Get snapper snapshots list into smap, in REVERSED time order
 # 1:   result hash name (existing)
@@ -2817,7 +2832,10 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n alast r=
     _jhresnap "$snode" "${ja_[create_snap_resnap]}"              || return 0
     ((cfDRYRUN)) && msg "Dryrun disabled snapshot creation" -DRY && return 0
     sn="$cfSNAPSHOT_LOCK_PREFIX$2"; ((!$3)) && sn="$cfSNAPSHOT_TEMP_PREFIX$sn" # tag for actual creation
-    n=$(run_snapper - "$sc" -q create -c "$sn" -p) && t=$(node_get_snaptime "$snode" "$n") && t=$(tsdate "$t") || r=1
+    snore_step "$tLASTSNAP" # ensure unique times
+    n=$(run_snapper - "$sc" -q create -c "$sn" -p) && tLASTSNAP=$EPOCHSECONDS \
+    && t=$(node_get_snaptime "$snode" "$n") && t=$(tsdate "$t") && tLASTSNAP="$t" \
+    || r=1
     ((r)) && error "Failed creating snapshot, Snapper reported \"$n\"" && return 1
     info "Created $m#$n"
     if (($3));
@@ -2898,7 +2916,7 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n alast r=
   ((!r)) && node_get_alast alast "$node" "$rnode" "$afilt" || r=1
   if ((!r)); then
     if [ ! "$snode" ]; then info "Archiving from path"
-      t=$(date "+%s" 2>/dev/null); v=$(date "${ja_[create_time_fmt]}" -d "@$t" 2>/dev/null)
+      t=$EPOCHSECONDS; v=$(date "${ja_[create_time_fmt]}" -d "@$t" 2>/dev/null)
       repl[TNOW]="$v"; repl[STIM]="$v"; repl[TSYN]="$v"
       _arwrap "$node" 0 "$t" || r=1
     else
@@ -2983,17 +3001,20 @@ jh_snapshot (){ local -n ja_=$1
   info "Using tag '${ja_[snaptag]}'"
   _jhtw snapshot S
 }
-_jh_snapshot_create (){ local -a args; local -i r=0; local buf
+_jh_snapshot_create (){ local -a args; local -i r=0; local n t
   _jhresnap "$node" "${ja_[create_resnap]}" || return 0
   args=(-q create -p)
   [ "${ja_[create_comment]}" ] && args+=(-d "${ja_[create_comment]}")
   [ "${ja_[snaptag]}" ]        && args+=(-c "${ja_[snaptag]}")
   ((ja_[create_rw]))           && args+=(--read-write) || args+=(--read-only)
   if ((!cfDRYRUN)); then
-    buf=$(run_snapper - "${gNDC[$node|_scfg]}" "${args[@]}") || r=$?
-  else buf="00"
+    snore_step "$tLASTSNAP" # ensure unique times
+    n=$(run_snapper - "${gNDC[$node|_scfg]}" "${args[@]}") && tLASTSNAP=$EPOCHSECONDS \
+    && t=$(node_get_snaptime "$node" "$n") && t=$(tsdate "$t") && tLASTSNAP=$t \
+    || r=$?
+  else n="00"
   fi
-  ((r)) && error "Failed, Snapper reported \"$buf\"" || info "Created #$buf"
+  ((r)) && error "Failed, Snapper reported \"$n\"" || info "Created #$n"
   ((!r))
 }
 _jh_snapshot_prune (){ local -A ptbl; local -a prul psel

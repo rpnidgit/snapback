@@ -26,8 +26,7 @@ once wider feedback got digested and any significant "environmental myopia" base
 and not limited to system root ones.
 - When the `btrfs` utility is present, snapshots currently mounted anywhere (not just at their std. targets)
 are now identified and skipped from deletion in custom prunings.
-- The `statedir` got an additional `alast` subdir, to buffer *last archived* info, primarily for planned use by other
-jobs than the archiving one(s).
+- The `statedir` got an additional `alast` subdir, to buffer *last archived* info.
 - Snapshot creations are now disabled when the subvol (not limited to the system root one) currently is an *active* snapshot,
 i.e. is found to have a snapshot mounted instead of the std. subvol root.  
 When needed, this can be changed  
@@ -36,9 +35,11 @@ When needed, this can be changed
   \- per run, temporarily overriding with `--resnap` or `--noresnap`. or by setting `cfALLOW_RESNAP` to `0` or `1` in the environment.  
 Such cases raise a warning when skipped per a `false` setting. With `true` or when overridden to either mode per the command line or environment,
 they are reported at info level.
+- Preparations for planned snapshot pruning enhancements.
 
 ### Changed
 - Archiving now populates and uses the new `alast` (see above) as a *last archived* cache.
+- Snapshot creations are now delayed when needed for unique epochal times (required for planned pruning enhancements).
 - (internal) Streamlined the `btrfs` based alternative (not relying on *Snapper*) *default* snapshot detection.
 - (internal) Reformatted some code that kept confusing VS Codium.
 - (internal) Streamlined some of the archiving handler's details.
