@@ -203,6 +203,7 @@ declare -ra cVFLT_archive=(
 declare -ra cVFLT_snapshot=(
   snaptag:inregex  # most general case here, refined later
   create_comment:noquote create_rw:bool create_resnap:bool
+  prune_archived_only:spafilt 'prune_archived_to_*:spafilt' prune_keep:alpha
   task_order:taskorder
   )
 # Bad chars/stuff to look for, per (own) var classes, leading ! negates the matching
@@ -229,6 +230,7 @@ declare -rA cVCHK_DEFS=(
   [safetag]='[^A-Za-z0-9_-]'            # POSIX safe sans dot
   [spalnum]='[^A-Za-z0-9 ]'             # e.g. unsigned date offsets ("2 hours" and such)
   [spalpha]='[^A-Za-z ]'                # e.g. prune methods
+  [spafilt]='!^(false|true|ignore|check|lookup|0|1|2)$' # snapshot pruning arch filter
   [maxcolors]='!^(auto|8|16|256|truecolor|24bit|rgb)$'
   [schedspec]='[^A-Za-z0-9*,./:@~ -]'   # schedules
   [taskorder]='!^[CcPp]'                # task order
@@ -288,17 +290,15 @@ declare -rA cYQ_QUERY=(
     $a=$a+[[(path|.[1:4]|join(".")),key,.]]|$a|.[]|(.0 +"|"+.1 +"|"+.2)'
   # get elem list for list P1
   [listdata]='.Lists[strenv(P1)]|.[]|select(kind=="scalar" and length!=0)'
-  # get all repos that node P1 is archived to
-  [reposbynode]='.a=[]|.a as $a|.Nodes[strenv(P1)].archive //{}|.[]|select(.disabled!=true and has("schedule") and has("create"))|
-    select((.create|kind!="scalar" and .create.disabled!=true) or (.create|length==0))|
-    with(.schedule;select(kind=="scalar")|.|={"@":.})|
-    select(.schedule.*|select(kind=="scalar" and length!=0 and .!="disabled"))|
-    $a=$a+[.repo]|$a|unique|.[]'
   # get sorted qn list for qnglob P1, with jc filter P2
   [schednames]='.a=[]|.a as $a|.Nodes.* //{}|pick(env(P2))|.*[]|select(.disabled!=true and has("schedule"))|
     with(.schedule;select(kind=="scalar")|.|={"@":.})|
     .schedule.*|select(kind=="scalar" and length!=0 and .!="disabled" and key==strenv(P1))|
     $a=$a+[key]|$a|unique|sort|.[]'
+  # get all job names that do create archives for node P1
+  [acjobsbynode]='.Nodes[strenv(P1)].archive //{}|.[]|select(.disabled!=true and has("schedule") and has("create") and has("repo"))|
+    with(.schedule;select(kind=="scalar")|.|={"@":.})|select(.schedule.*|select(kind=="scalar" and length!=0 and .!="disabled"))|
+    select((.create|kind!="scalar" and .create.disabled!=true) or (.create|length==0))|path|.[1:4]|join(".")'
 )
 
 # Keys for systemctl queries (some not yet used here atm, but helpful with custom setups)
@@ -2046,11 +2046,6 @@ node_get_pass (){ local p
   [ "${gNDC[$1|repo_passphrase]}" ]  && p="P:${gNDC[$1|repo_passphrase]}"
   echo "${p:-P:}"
 }
-# Get all repos node $2 is archived to into ary $1
-node_get_repos (){ local -n ra_=$1
-  readarray -t ra_ < <(cfq - reposbynode "$2"); [ "${ra_[0]}" ] || ra_=()
-  ((${#ra_[@]}))
-}
 # Get snapper snapshots list into smap, in REVERSED time order
 # 1:   result hash name (existing)
 # 2:   node name (MUST be a snapped node)
@@ -2703,7 +2698,7 @@ prune_getrules (){ local -n kja_=$2; local -i i r=0 s=0; local k v t
     fi
   done
   xvmsg P "🢃 Rules digest" && dump_str "${kra_[*]}"
-  ((!r)) && ((!${#kra_[@]})) && cfgerr "Nothing configured to keep" && r=1
+  ((!r)) && [ "${kja_[prune_keep]}" != "none" ] && ((!${#kra_[@]})) && cfgerr "Nothing configured to keep" && r=1
   ((!r))
 }
 # Check & predigest prune.method cfg
@@ -2721,7 +2716,7 @@ prune_methfix (){ local -n mr_=$1; local t="$mr_"
   [ "$mr_" = "11" ]  && t="snapperlike"
   mr_+="|$t"
 }
-# Flag cands in info hash acc. to rules & assemble the remaining indexess
+# Flag cands in info hash acc. to rules & assemble the remaining indexes
 # 1: selected results ary name (pruning cand. indexes)
 # 2: candidate hash name
 # 3: rules ary name
@@ -2764,6 +2759,20 @@ prune_select (){ local -n psa_=$1 pca_=$2 pra_=$3; local -i i j l="${pca_[_len]:
 ##############################################################################
 # %Class Handlers & Helpers
 
+# Init placeholder hash $1 for node $2 and opt. job name $3
+plh_init (){ local -n pha_=$1; local t
+  [ "$3" ] && { t=${3#*.}; t=${t#*.}; t=${t%%.*}; }
+  pha_=([NODE]="$2" [JOBN]="${3:-_}"  [JOBI]="${t:-_}"
+        [DEVN]="${gNDC[$2|_dev]:-_}"  [UUID]="${gNDC[$2|_uuid]:-_}"
+        [SVOL]="${gNDC[$2|_svol]:-_}" [SVID]="${gNDC[$2|_svid]:-_}"
+        [SNAM]="_"  [SNUM]="0"        [TNOW]="_" [STIM]="_" [TSYN]="_"
+  )
+}
+# Replace placeholders in $2 into var $1 acc. to repl hash $3
+plh_repl (){ local -n pha_=$3 phr_=$1; local k n="$2"
+  for k in "${!pha_[@]}"; do n="${n//"{$k}"/${pha_[$k]}}"; done; phr_="$n"
+}
+
 # Job Task Wrapper using $1 (job class),  $2 ("A"|"S") and inherited
 # vars to handle task sequence & surrounding infos in simple fashion
 _jhtw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK_JOB" aMSGPRE="$aMSGPRE"
@@ -2792,8 +2801,6 @@ _jhtw () { local -i i r=0; local a o="${ja_[task_order]:0:1}" t tt je="$SNAPBACK
   done
   return "$r"
 }
-# Replace placeholders in $1 acc. to $repl hash
-_jhprepl (){ local k n="$1"; for k in "${!repl[@]}"; do n="${n//"{$k}"/${repl[$k]}}"; done; echo "$n"; }
 # Catch resnaps for node $1 using flag $2
 _jhresnap (){ local s="${gNDC[$1|_svol]}" v
   snapper_getpathnum "$s" >/dev/null                   || return 0 # not a resnap
@@ -2807,14 +2814,8 @@ jh_archive (){ local -n ja_=$1;
                local -r node="${ja_[_jn]}" rnode="${ja_[repo]}"
                local -ra rba=("${gNDC[$rnode|path]}" "$(node_get_pass "$rnode")")
                local -i rc=0 rp=0; local tt
-               local -A repl=(
-                 [NODE]="$node"
-                 [JOBI]="${ja_[_ji]}"                [JOBN]="$SNAPBACK_JOB"
-                 [DEVN]="${gNDC[$node|_dev]:-_}"     [UUID]="${gNDC[$node|_uuid]:-_}"
-                 [SVOL]="${gNDC[$node|_svol]:-_}"    [SVID]="${gNDC[$node|_svid]:-_}"
-                 [TNOW]="_"  [SNUM]="_"  [STIM]="_"  [TSYN]="_"
-               )
-               local afilt="$(_jhprepl "${ja_[_ap_filt]}")"
+               local -A plh; plh_init plh "$node" "$SNAPBACK_JOB"
+               local afilt;  plh_repl afilt "${ja_[_ap_filt]}" plh
   info "Using repo $rnode, classifier '$afilt'"
   ((${ja_[_borgbin]})) && info "Using ${aBORGS[${ja_[_borgbin]}|cf]}, v${aBORGS[${ja_[_borgbin]}|vs]}"
   _jhtw archive A
@@ -2869,10 +2870,11 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n alast r=
   }
   # Run borg incl. bind mount wrapping & prefixing stuff
   # 1:node, 2:snapshot num (0-alike for classic path), 3:archive timestamp, 4+ extra args (not in $args & w/o archive name & path)
-  _arwrap (){ local a=$(_jhprepl "${ja_[_ac_name]}") adir mp t tfmt; local -i r=0
+  _arwrap (){ local a adir mp t tfmt; local -i r=0
+    plh_repl a "${ja_[_ac_name]}" plh
     ((aBORGVN<200)) && tfmt="+%FT%T" || tfmt="+%FT%T+00:00"
     if [ "${ja_[_ac_suff]}" ]; then
-      t=$(_jhprepl "${ja_[_ac_suff]}")
+      plh_repl t "${ja_[_ac_suff]}" plh
       xvmsg A "⮡ Using cache suffix '$t'"
       declare -x BORG_FILES_CACHE_SUFFIX="$t"
     fi
@@ -2911,16 +2913,16 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n alast r=
     else cfgerr "exclude_patternfile not found or bad: '$t'" && r=1
   fi
   #FIXME: ?? move comment & cmdopts (as overrides) into wrapper to expand more placeholders in comment?
-  [ "${ja_[create_comment]}" ]          && args+=(--comment "$(_jhprepl "${ja_[create_comment]}")")
+  [ "${ja_[create_comment]}" ]          && { plh_repl t "${ja_[create_comment]}" plh; args+=(--comment "$t"); }
   [ "${ja_[create_borg_cmdopts]}" ]     && args+=("${ja_[create_borg_cmdopts]}")
   ((!r)) && node_get_alast alast "$node" "$rnode" "$afilt" || r=1
   if ((!r)); then
     if [ ! "$snode" ]; then info "Archiving from path"
       t=$EPOCHSECONDS; v=$(date "${ja_[create_time_fmt]}" -d "@$t" 2>/dev/null)
-      repl[TNOW]="$v"; repl[STIM]="$v"; repl[TSYN]="$v"
+      plh[SNAM]="_"; plh[SNUM]="0"; plh[TNOW]="$v"; plh[STIM]="$v"; plh[TSYN]="$v"
       _arwrap "$node" 0 "$t" || r=1
     else
-      repl[SNAM]="${gNDC[$snode|_scfg]}"
+      plh[SNAM]="${gNDC[$snode|_scfg]}"
       if ((ja_[create_snap_useown])); then info "Archiving from own '${ja_[create_snap_snaptag]}' snapshot"
         _asnew asns "${ja_[create_snap_snaptag]}" "${ja_[create_snap_keepown]}" || r=1
       else info "Archiving from '${ja_[create_snap_snaptag]}' snapshots"
@@ -2931,10 +2933,10 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n alast r=
       for ((i=n-1; i>=0 && r==0; i--)); do # oldest first
         inopts A && timer_start ITEM
         v="${asns[$i]}"; j="${v%|*}"; v="${v#*|}"
-        repl[TNOW]=$(date "${ja_[create_time_fmt]}" 2>/dev/null)
-        repl[SNUM]="$j"
-        repl[STIM]=$(date "${ja_[create_time_fmt]}" -d "@$v" 2>/dev/null)
-        repl[TSYN]="${repl[STIM]}"
+        plh[SNUM]="$j"
+        plh[TNOW]=$(date "${ja_[create_time_fmt]}" 2>/dev/null)
+        plh[STIM]=$(date "${ja_[create_time_fmt]}" -d "@$v" 2>/dev/null)
+        plh[TSYN]="${plh[STIM]}"
         _arwrap "$node" "$j" "$v" || r=1
         inopts A && timer_time ITEM it && msg "⮡ time: ${it}s" ---A
       done
@@ -2948,7 +2950,7 @@ _jh_archive_create (){ local -a args=("${rba[@]}") asns; local -i i j n alast r=
 }
 _jh_archive_prune (){ local -A ptbl; local -a args=("${rba[@]}") prul psel
                       local -i i j n r=0 s=0; local pm="${ja_[prune_method]}" k v it
-  repl[TNOW]="*"; repl[SNUM]="*"; repl[STIM]="*"; repl[TSYN]="*"
+  # Note pruning got no own placeholder expansions
   # shellcheck disable=SC2206
   [ "${ja_[prune_borg_genopts]}" ] && args+=(${ja_[prune_borg_genopts]})
   inopts A && inopts P && msg "method=$pm" --AP
@@ -3020,7 +3022,6 @@ _jh_snapshot_create (){ local -a args; local -i r=0; local n t
 _jh_snapshot_prune (){ local -A ptbl; local -a prul psel
                        local -i i k v n r=0 s=0; local pm="${ja_[prune_method]}" it t
   inopts S && inopts P && msg "method=$pm" --SP
-  n=1
   if [ "$pm" = "snapper" ] || [ "$pm" = "native" ]; then info "Pruning natively with snapper"
     if ((!cfDRYRUN)); then
       run_snapper log "${gNDC[$node|_scfg]}" cleanup "${ja_[snaptag]}" || r=$?

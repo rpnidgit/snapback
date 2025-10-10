@@ -40,9 +40,11 @@ they are reported at info level.
 ### Changed
 - Archiving now populates and uses the new `alast` (see above) as a *last archived* cache.
 - Snapshot creations are now delayed when needed for unique epochal times (required for planned pruning enhancements).
+- Custom snapshot prunings only: `keep` retentions can now be disabled w/o nagging by giving `keep` the explicit scalar value `none`.
 - (internal) Streamlined the `btrfs` based alternative (not relying on *Snapper*) *default* snapshot detection.
 - (internal) Reformatted some code that kept confusing VS Codium.
 - (internal) Streamlined some of the archiving handler's details.
+- (internal) Cleaned placeholder replacements.
 
 ### Fixed
 - When archiving from "classic" paths, archive times were not set to always equal the ones indicated per (our) naming placeholders.
